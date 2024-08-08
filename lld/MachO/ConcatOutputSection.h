@@ -25,8 +25,8 @@ class Defined;
 // in the final binary.
 class ConcatOutputSection : public OutputSection {
 public:
-  explicit ConcatOutputSection(StringRef name)
-      : OutputSection(ConcatKind, name) {}
+  explicit ConcatOutputSection(Ctx&ctx,StringRef name)
+      : OutputSection(ctx, ConcatKind, name) {}
 
   const ConcatInputSection *firstSection() const { return inputs.front(); }
   const ConcatInputSection *lastSection() const { return inputs.back(); }
@@ -49,7 +49,7 @@ public:
     return sec->kind() == ConcatKind;
   }
 
-  static ConcatOutputSection *getOrCreateForInput(const InputSection *);
+  static ConcatOutputSection *getOrCreateForInput(Ctx&ctx,const InputSection *);
 
   std::vector<ConcatInputSection *> inputs;
 
@@ -66,7 +66,7 @@ private:
 // support thunk insertion.
 class TextOutputSection : public ConcatOutputSection {
 public:
-  explicit TextOutputSection(StringRef name) : ConcatOutputSection(name) {}
+  explicit TextOutputSection(Ctx&ctx,StringRef name) : ConcatOutputSection(ctx,name) {}
   void finalizeContents() override {}
   void finalize() override;
   bool needsThunks() const;
@@ -100,13 +100,7 @@ struct ThunkInfo {
   uint8_t sequence = 0;        // how many thunks created so-far?
 };
 
-NamePair maybeRenameSection(NamePair key);
-
-// Output sections are added to output segments in iteration order
-// of ConcatOutputSection, so must have deterministic iteration order.
-extern llvm::MapVector<NamePair, ConcatOutputSection *> concatOutputSections;
-
-extern llvm::DenseMap<Symbol *, ThunkInfo> thunkMap;
+NamePair maybeRenameSection(Ctx&ctx,NamePair key);
 
 } // namespace lld::macho
 

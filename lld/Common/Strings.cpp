@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Common/Strings.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/StringExtras.h"
@@ -19,7 +20,8 @@
 using namespace llvm;
 using namespace lld;
 
-SingleStringMatcher::SingleStringMatcher(StringRef Pattern) {
+SingleStringMatcher::SingleStringMatcher(CommonLinkerContext &ctx,
+                                         StringRef Pattern) {
   if (Pattern.size() > 2 && Pattern.starts_with("\"") &&
       Pattern.ends_with("\"")) {
     ExactMatch = true;
@@ -27,7 +29,7 @@ SingleStringMatcher::SingleStringMatcher(StringRef Pattern) {
   } else {
     Expected<GlobPattern> Glob = GlobPattern::create(Pattern);
     if (!Glob) {
-      error(toString(Glob.takeError()) + ": " + Pattern);
+      ctx.error(toString(Glob.takeError()) + ": " + Pattern);
       return;
     }
     ExactMatch = false;
@@ -47,14 +49,14 @@ bool StringMatcher::match(StringRef s) const {
 }
 
 // Converts a hex string (e.g. "deadbeef") to a vector.
-SmallVector<uint8_t, 0> lld::parseHex(StringRef s) {
+SmallVector<uint8_t, 0> lld::parseHex(CommonLinkerContext &ctx, StringRef s) {
   SmallVector<uint8_t, 0> hex;
   while (!s.empty()) {
     StringRef b = s.substr(0, 2);
     s = s.substr(2);
     uint8_t h;
     if (!to_integer(b, h, 16)) {
-      error("not a hexadecimal value: " + b);
+      ctx.error("not a hexadecimal value: " + b);
       return {};
     }
     hex.push_back(h);
@@ -69,10 +71,11 @@ bool lld::isValidCIdentifier(StringRef s) {
 }
 
 // Write the contents of the a buffer to a file
-void lld::saveBuffer(StringRef buffer, const Twine &path) {
+void lld::saveBuffer(CommonLinkerContext &ctx, StringRef buffer,
+                     const Twine &path) {
   std::error_code ec;
   raw_fd_ostream os(path.str(), ec, sys::fs::OpenFlags::OF_None);
   if (ec)
-    error("cannot create " + path + ": " + ec.message());
+    ctx.error("cannot create " + path + ": " + ec.message());
   os << buffer;
 }

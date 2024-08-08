@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Common/Args.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -23,8 +24,8 @@ int lld::args::getCGOptLevel(int optLevelLTO) {
   return std::clamp(optLevelLTO, 2, 3);
 }
 
-static int64_t getInteger(opt::InputArgList &args, unsigned key,
-                          int64_t Default, unsigned base) {
+static int64_t getInteger(CommonLinkerContext &ctx, opt::InputArgList &args,
+                          unsigned key, int64_t Default, unsigned base) {
   auto *a = args.getLastArg(key);
   if (!a)
     return Default;
@@ -37,18 +38,18 @@ static int64_t getInteger(opt::InputArgList &args, unsigned key,
     return v;
 
   StringRef spelling = args.getArgString(a->getIndex());
-  error(spelling + ": number expected, but got '" + a->getValue() + "'");
+  ctx.error(spelling + ": number expected, but got '" + a->getValue() + "'");
   return 0;
 }
 
-int64_t lld::args::getInteger(opt::InputArgList &args, unsigned key,
-                              int64_t Default) {
-  return ::getInteger(args, key, Default, 10);
+int64_t lld::args::getInteger(CommonLinkerContext &ctx, opt::InputArgList &args,
+                              unsigned key, int64_t Default) {
+  return ::getInteger(ctx, args, key, Default, 10);
 }
 
-int64_t lld::args::getHex(opt::InputArgList &args, unsigned key,
-                          int64_t Default) {
-  return ::getInteger(args, key, Default, 16);
+int64_t lld::args::getHex(CommonLinkerContext &ctx, opt::InputArgList &args,
+                          unsigned key, int64_t Default) {
+  return ::getInteger(ctx, args, key, Default, 16);
 }
 
 SmallVector<StringRef, 0> lld::args::getStrings(opt::InputArgList &args,
@@ -59,13 +60,14 @@ SmallVector<StringRef, 0> lld::args::getStrings(opt::InputArgList &args,
   return v;
 }
 
-uint64_t lld::args::getZOptionValue(opt::InputArgList &args, int id,
+uint64_t lld::args::getZOptionValue(CommonLinkerContext &ctx,
+                                    opt::InputArgList &args, int id,
                                     StringRef key, uint64_t defaultValue) {
   for (auto *arg : args.filtered(id)) {
     std::pair<StringRef, StringRef> kv = StringRef(arg->getValue()).split('=');
     if (kv.first == key) {
       if (!to_integer(kv.second, defaultValue))
-        error("invalid " + key + ": " + kv.second);
+        ctx.error("invalid " + key + ": " + kv.second);
       arg->claim();
     }
   }

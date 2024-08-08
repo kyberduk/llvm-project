@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "Target.h"
@@ -27,7 +28,7 @@ private:
   uint32_t calcEFlagsV4() const;
 
 public:
-  AMDGPU();
+  AMDGPU(Ctx &ctx);
   uint32_t calcEFlags() const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
@@ -38,68 +39,68 @@ public:
 };
 } // namespace
 
-AMDGPU::AMDGPU() {
+AMDGPU::AMDGPU(Ctx &ctx) : TargetInfo(ctx) {
   relativeRel = R_AMDGPU_RELATIVE64;
   gotRel = R_AMDGPU_ABS64;
   symbolicRel = R_AMDGPU_ABS64;
 }
 
-static uint32_t getEFlags(InputFile *file) {
-  return cast<ObjFile<ELF64LE>>(file)->getObj().getHeader().e_flags;
+static uint32_t getEFlags(Ctx &ctx, InputFile *file) {
+  return cast<ObjFile<ELF64LE>>(file)->getObj(ctx).getHeader().e_flags;
 }
 
 uint32_t AMDGPU::calcEFlagsV3() const {
-  uint32_t ret = getEFlags(ctx.objectFiles[0]);
+  uint32_t ret = getEFlags(ctx, ctx.objectFiles[0]);
 
   // Verify that all input files have the same e_flags.
   for (InputFile *f : ArrayRef(ctx.objectFiles).slice(1)) {
-    if (ret == getEFlags(f))
+    if (ret == getEFlags(ctx, f))
       continue;
-    error("incompatible e_flags: " + toString(f));
+    ctx.error("incompatible e_flags: " + toString(ctx, f));
     return 0;
   }
   return ret;
 }
 
 uint32_t AMDGPU::calcEFlagsV4() const {
-  uint32_t retMach = getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_MACH;
+  uint32_t retMach = getEFlags(ctx, ctx.objectFiles[0]) & EF_AMDGPU_MACH;
   uint32_t retXnack =
-      getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_FEATURE_XNACK_V4;
+      getEFlags(ctx, ctx.objectFiles[0]) & EF_AMDGPU_FEATURE_XNACK_V4;
   uint32_t retSramEcc =
-      getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_FEATURE_SRAMECC_V4;
+      getEFlags(ctx, ctx.objectFiles[0]) & EF_AMDGPU_FEATURE_SRAMECC_V4;
 
   // Verify that all input files have compatible e_flags (same mach, all
   // features in the same category are either ANY, ANY and ON, or ANY and OFF).
   for (InputFile *f : ArrayRef(ctx.objectFiles).slice(1)) {
-    if (retMach != (getEFlags(f) & EF_AMDGPU_MACH)) {
-      error("incompatible mach: " + toString(f));
+    if (retMach != (getEFlags(ctx, f) & EF_AMDGPU_MACH)) {
+      ctx.error("incompatible mach: " + toString(ctx, f));
       return 0;
     }
 
     if (retXnack == EF_AMDGPU_FEATURE_XNACK_UNSUPPORTED_V4 ||
         (retXnack != EF_AMDGPU_FEATURE_XNACK_ANY_V4 &&
-            (getEFlags(f) & EF_AMDGPU_FEATURE_XNACK_V4)
-                != EF_AMDGPU_FEATURE_XNACK_ANY_V4)) {
-      if (retXnack != (getEFlags(f) & EF_AMDGPU_FEATURE_XNACK_V4)) {
-        error("incompatible xnack: " + toString(f));
+         (getEFlags(ctx, f) & EF_AMDGPU_FEATURE_XNACK_V4) !=
+             EF_AMDGPU_FEATURE_XNACK_ANY_V4)) {
+      if (retXnack != (getEFlags(ctx, f) & EF_AMDGPU_FEATURE_XNACK_V4)) {
+        ctx.error("incompatible xnack: " + toString(ctx, f));
         return 0;
       }
     } else {
       if (retXnack == EF_AMDGPU_FEATURE_XNACK_ANY_V4)
-        retXnack = getEFlags(f) & EF_AMDGPU_FEATURE_XNACK_V4;
+        retXnack = getEFlags(ctx, f) & EF_AMDGPU_FEATURE_XNACK_V4;
     }
 
     if (retSramEcc == EF_AMDGPU_FEATURE_SRAMECC_UNSUPPORTED_V4 ||
         (retSramEcc != EF_AMDGPU_FEATURE_SRAMECC_ANY_V4 &&
-            (getEFlags(f) & EF_AMDGPU_FEATURE_SRAMECC_V4) !=
-                EF_AMDGPU_FEATURE_SRAMECC_ANY_V4)) {
-      if (retSramEcc != (getEFlags(f) & EF_AMDGPU_FEATURE_SRAMECC_V4)) {
-        error("incompatible sramecc: " + toString(f));
+         (getEFlags(ctx, f) & EF_AMDGPU_FEATURE_SRAMECC_V4) !=
+             EF_AMDGPU_FEATURE_SRAMECC_ANY_V4)) {
+      if (retSramEcc != (getEFlags(ctx, f) & EF_AMDGPU_FEATURE_SRAMECC_V4)) {
+        ctx.error("incompatible sramecc: " + toString(ctx, f));
         return 0;
       }
     } else {
       if (retSramEcc == EF_AMDGPU_FEATURE_SRAMECC_ANY_V4)
-        retSramEcc = getEFlags(f) & EF_AMDGPU_FEATURE_SRAMECC_V4;
+        retSramEcc = getEFlags(ctx, f) & EF_AMDGPU_FEATURE_SRAMECC_V4;
     }
   }
 
@@ -111,7 +112,7 @@ uint32_t AMDGPU::calcEFlags() const {
     return 0;
 
   uint8_t abiVersion = cast<ObjFile<ELF64LE>>(ctx.objectFiles[0])
-                           ->getObj()
+                           ->getObj(ctx)
                            .getHeader()
                            .e_ident[EI_ABIVERSION];
   switch (abiVersion) {
@@ -122,7 +123,7 @@ uint32_t AMDGPU::calcEFlags() const {
   case ELFABIVERSION_AMDGPU_HSA_V5:
     return calcEFlagsV4();
   default:
-    error("unknown abi version: " + Twine(abiVersion));
+    ctx.error("unknown abi version: " + Twine(abiVersion));
     return 0;
   }
 }
@@ -146,7 +147,7 @@ void AMDGPU::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     break;
   case R_AMDGPU_REL16: {
     int64_t simm = (static_cast<int64_t>(val) - 4) / 4;
-    checkInt(loc, simm, 16, rel);
+    checkInt(ctx, loc, simm, 16, rel);
     write16le(loc, simm);
     break;
   }
@@ -172,8 +173,8 @@ RelExpr AMDGPU::getRelExpr(RelType type, const Symbol &s,
   case R_AMDGPU_GOTPCREL32_HI:
     return R_GOT_PC;
   default:
-    error(getErrorLocation(loc) + "unknown relocation (" + Twine(type) +
-          ") against symbol " + toString(s));
+    ctx.error(getErrorLocation(ctx, loc) + "unknown relocation (" +
+              Twine(type) + ") against symbol " + toString(ctx, s));
     return R_NONE;
   }
 }
@@ -190,15 +191,13 @@ int64_t AMDGPU::getImplicitAddend(const uint8_t *buf, RelType type) const {
     return 0;
   case R_AMDGPU_ABS64:
   case R_AMDGPU_RELATIVE64:
-    return read64(buf);
+    return read64(ctx, buf);
   default:
-    internalLinkerError(getErrorLocation(buf),
-                        "cannot read addend for relocation " + toString(type));
+    internalLinkerError(ctx, getErrorLocation(ctx, buf),
+                        "cannot read addend for relocation " +
+                            toString(ctx, type));
     return 0;
   }
 }
 
-TargetInfo *elf::getAMDGPUTargetInfo() {
-  static AMDGPU target;
-  return &target;
-}
+TargetInfo *elf::getAMDGPUTargetInfo(Ctx &ctx) { return new AMDGPU(ctx); }

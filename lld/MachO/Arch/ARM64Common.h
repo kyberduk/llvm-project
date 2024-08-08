@@ -9,6 +9,7 @@
 #ifndef LLD_MACHO_ARCH_ARM64COMMON_H
 #define LLD_MACHO_ARCH_ARM64COMMON_H
 
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
@@ -17,9 +18,8 @@
 #include "llvm/BinaryFormat/MachO.h"
 
 namespace lld::macho {
-
 struct ARM64Common : TargetInfo {
-  template <class LP> ARM64Common(LP lp) : TargetInfo(lp) {}
+  template <class LP> ARM64Common(Ctx &ctx, LP lp) : TargetInfo(ctx, lp) {}
 
   int64_t getEmbeddedAddend(MemoryBufferRef, uint64_t offset,
                             const llvm::MachO::relocation_info) const override;
@@ -42,17 +42,17 @@ inline uint64_t bitField(uint64_t value, int right, int width, int left) {
 // |           |                       imm26                       |
 // +-----------+---------------------------------------------------+
 
-inline void encodeBranch26(uint32_t *loc, const Reloc &r, uint32_t base,
+inline void encodeBranch26(Ctx&ctx,uint32_t *loc, const Reloc &r, uint32_t base,
                            uint64_t va) {
-  checkInt(loc, r, va, 28);
+  checkInt(ctx,loc, r, va, 28);
   // Since branch destinations are 4-byte aligned, the 2 least-
   // significant bits are 0. They are right shifted off the end.
   llvm::support::endian::write32le(loc, base | bitField(va, 2, 26, 0));
 }
 
-inline void encodeBranch26(uint32_t *loc, SymbolDiagnostic d, uint32_t base,
+inline void encodeBranch26(Ctx&ctx,uint32_t *loc, SymbolDiagnostic d, uint32_t base,
                            uint64_t va) {
-  checkInt(loc, d, va, 28);
+  checkInt(ctx,loc, d, va, 28);
   llvm::support::endian::write32le(loc, base | bitField(va, 2, 26, 0));
 }
 
@@ -61,22 +61,24 @@ inline void encodeBranch26(uint32_t *loc, SymbolDiagnostic d, uint32_t base,
 // | |ilo|         |                immhi                |         |
 // +-+---+---------+-------------------------------------+---------+
 
-inline void encodePage21(uint32_t *loc, const Reloc &r, uint32_t base,
+inline void encodePage21(Ctx&ctx,uint32_t *loc, const Reloc &r, uint32_t base,
                          uint64_t va) {
-  checkInt(loc, r, va, 35);
+  checkInt(ctx,loc, r, va, 35);
   llvm::support::endian::write32le(loc, base | bitField(va, 12, 2, 29) |
                                             bitField(va, 14, 19, 5));
 }
 
-inline void encodePage21(uint32_t *loc, SymbolDiagnostic d, uint32_t base,
+inline void encodePage21(Ctx&ctx,uint32_t *loc, SymbolDiagnostic d, uint32_t base,
                          uint64_t va) {
-  checkInt(loc, d, va, 35);
+  checkInt(ctx,loc, d, va, 35);
   llvm::support::endian::write32le(loc, base | bitField(va, 12, 2, 29) |
                                             bitField(va, 14, 19, 5));
 }
 
-void reportUnalignedLdrStr(void *loc, const Reloc &, uint64_t va, int align);
-void reportUnalignedLdrStr(void *loc, SymbolDiagnostic, uint64_t va, int align);
+void reportUnalignedLdrStr(Ctx &ctx, void *loc, const Reloc &, uint64_t va,
+                           int align);
+void reportUnalignedLdrStr(Ctx &ctx, void *loc, SymbolDiagnostic, uint64_t va,
+                           int align);
 
 //                      21                   10
 // +-------------------+-----------------------+-------------------+
@@ -84,7 +86,7 @@ void reportUnalignedLdrStr(void *loc, SymbolDiagnostic, uint64_t va, int align);
 // +-------------------+-----------------------+-------------------+
 
 template <typename Target>
-inline void encodePageOff12(uint32_t *loc, Target t, uint32_t base,
+inline void encodePageOff12(Ctx &ctx, uint32_t *loc, Target t, uint32_t base,
                             uint64_t va) {
   int scale = 0;
   if ((base & 0x3b00'0000) == 0x3900'0000) { // load/store
@@ -94,7 +96,7 @@ inline void encodePageOff12(uint32_t *loc, Target t, uint32_t base,
   }
   const int size = 1 << scale;
   if ((va & (size - 1)) != 0)
-    reportUnalignedLdrStr(loc, t, va, size);
+    reportUnalignedLdrStr(ctx, loc, t, va, size);
 
   // TODO(gkm): extract embedded addend and warn if != 0
   // uint64_t addend = ((base & 0x003FFC00) >> 10);
@@ -107,54 +109,45 @@ inline uint64_t pageBits(uint64_t address) {
   return address & pageMask;
 }
 
-inline void writeStub(uint8_t *buf8, const uint32_t stubCode[3],
-                      const macho::Symbol &sym, uint64_t pointerVA) {
-  auto *buf32 = reinterpret_cast<uint32_t *>(buf8);
-  constexpr size_t stubCodeSize = 3 * sizeof(uint32_t);
-  SymbolDiagnostic d = {&sym, "stub"};
-  uint64_t pcPageBits =
-      pageBits(in.stubs->addr + sym.stubsIndex * stubCodeSize);
-  encodePage21(&buf32[0], d, stubCode[0], pageBits(pointerVA) - pcPageBits);
-  encodePageOff12(&buf32[1], d, stubCode[1], pointerVA);
-  buf32[2] = stubCode[2];
-}
+void writeStub(Ctx &ctx, uint8_t *buf8, const uint32_t stubCode[3],
+               const macho::Symbol &sym, uint64_t pointerVA);
 
 template <class LP>
-inline void writeStubHelperHeader(uint8_t *buf8,
+inline void writeStubHelperHeader(Ctx&ctx, uint8_t *buf8,
                                   const uint32_t stubHelperHeaderCode[6]) {
   auto *buf32 = reinterpret_cast<uint32_t *>(buf8);
-  auto pcPageBits = [](int i) {
-    return pageBits(in.stubHelper->addr + i * sizeof(uint32_t));
+  auto pcPageBits = [&ctx=ctx](int i) {
+    return pageBits(ctx.in.stubHelper->addr + i * sizeof(uint32_t));
   };
-  uint64_t loaderVA = in.imageLoaderCache->getVA();
+  uint64_t loaderVA = ctx.in.imageLoaderCache->getVA();
   SymbolDiagnostic d = {nullptr, "stub header helper"};
-  encodePage21(&buf32[0], d, stubHelperHeaderCode[0],
+  encodePage21(ctx,&buf32[0], d, stubHelperHeaderCode[0],
                pageBits(loaderVA) - pcPageBits(0));
-  encodePageOff12(&buf32[1], d, stubHelperHeaderCode[1], loaderVA);
+  encodePageOff12(ctx,&buf32[1], d, stubHelperHeaderCode[1], loaderVA);
   buf32[2] = stubHelperHeaderCode[2];
   uint64_t binderVA =
-      in.got->addr + in.stubHelper->stubBinder->gotIndex * LP::wordSize;
-  encodePage21(&buf32[3], d, stubHelperHeaderCode[3],
+      ctx.in.got->addr + ctx.in.stubHelper->stubBinder->gotIndex * LP::wordSize;
+  encodePage21(ctx,&buf32[3], d, stubHelperHeaderCode[3],
                pageBits(binderVA) - pcPageBits(3));
-  encodePageOff12(&buf32[4], d, stubHelperHeaderCode[4], binderVA);
+  encodePageOff12(ctx,&buf32[4], d, stubHelperHeaderCode[4], binderVA);
   buf32[5] = stubHelperHeaderCode[5];
 }
 
-inline void writeStubHelperEntry(uint8_t *buf8,
+inline void writeStubHelperEntry(Ctx&ctx,uint8_t *buf8,
                                  const uint32_t stubHelperEntryCode[3],
                                  const Symbol &sym, uint64_t entryVA) {
   auto *buf32 = reinterpret_cast<uint32_t *>(buf8);
   auto pcVA = [entryVA](int i) { return entryVA + i * sizeof(uint32_t); };
-  uint64_t stubHelperHeaderVA = in.stubHelper->addr;
+  uint64_t stubHelperHeaderVA = ctx.in.stubHelper->addr;
   buf32[0] = stubHelperEntryCode[0];
-  encodeBranch26(&buf32[1], {&sym, "stub helper"}, stubHelperEntryCode[1],
+  encodeBranch26(ctx,&buf32[1], {&sym, "stub helper"}, stubHelperEntryCode[1],
                  stubHelperHeaderVA - pcVA(1));
   buf32[2] = sym.lazyBindOffset;
 }
 
 template <class LP>
 inline void
-writeObjCMsgSendFastStub(uint8_t *buf, const uint32_t objcStubsFastCode[8],
+writeObjCMsgSendFastStub(Ctx&ctx,uint8_t *buf, const uint32_t objcStubsFastCode[8],
                          Symbol *sym, uint64_t stubsAddr, uint64_t stubOffset,
                          uint64_t selrefsVA, uint64_t selectorIndex,
                          uint64_t gotAddr, uint64_t msgSendIndex) {
@@ -166,14 +159,14 @@ writeObjCMsgSendFastStub(uint8_t *buf, const uint32_t objcStubsFastCode[8],
   };
 
   uint64_t selectorOffset = selectorIndex * LP::wordSize;
-  encodePage21(&buf32[0], d, objcStubsFastCode[0],
+  encodePage21(ctx,&buf32[0], d, objcStubsFastCode[0],
                pageBits(selrefsVA + selectorOffset) - pcPageBits(0));
-  encodePageOff12(&buf32[1], d, objcStubsFastCode[1],
+  encodePageOff12(ctx,&buf32[1], d, objcStubsFastCode[1],
                   selrefsVA + selectorOffset);
   uint64_t gotOffset = msgSendIndex * LP::wordSize;
-  encodePage21(&buf32[2], d, objcStubsFastCode[2],
+  encodePage21(ctx,&buf32[2], d, objcStubsFastCode[2],
                pageBits(gotAddr + gotOffset) - pcPageBits(2));
-  encodePageOff12(&buf32[3], d, objcStubsFastCode[3], gotAddr + gotOffset);
+  encodePageOff12(ctx,&buf32[3], d, objcStubsFastCode[3], gotAddr + gotOffset);
   buf32[4] = objcStubsFastCode[4];
   buf32[5] = objcStubsFastCode[5];
   buf32[6] = objcStubsFastCode[6];
@@ -182,7 +175,7 @@ writeObjCMsgSendFastStub(uint8_t *buf, const uint32_t objcStubsFastCode[8],
 
 template <class LP>
 inline void
-writeObjCMsgSendSmallStub(uint8_t *buf, const uint32_t objcStubsSmallCode[3],
+writeObjCMsgSendSmallStub(Ctx&ctx,uint8_t *buf, const uint32_t objcStubsSmallCode[3],
                           Symbol *sym, uint64_t stubsAddr, uint64_t stubOffset,
                           uint64_t selrefsVA, uint64_t selectorIndex,
                           uint64_t msgSendAddr, uint64_t msgSendIndex) {
@@ -194,13 +187,13 @@ writeObjCMsgSendSmallStub(uint8_t *buf, const uint32_t objcStubsSmallCode[3],
   };
 
   uint64_t selectorOffset = selectorIndex * LP::wordSize;
-  encodePage21(&buf32[0], d, objcStubsSmallCode[0],
+  encodePage21(ctx,&buf32[0], d, objcStubsSmallCode[0],
                pageBits(selrefsVA + selectorOffset) - pcPageBits(0));
-  encodePageOff12(&buf32[1], d, objcStubsSmallCode[1],
+  encodePageOff12(ctx,&buf32[1], d, objcStubsSmallCode[1],
                   selrefsVA + selectorOffset);
-  uint64_t msgSendStubVA = msgSendAddr + msgSendIndex * target->stubSize;
+  uint64_t msgSendStubVA = msgSendAddr + msgSendIndex * ctx.target->stubSize;
   uint64_t pcVA = stubsAddr + stubOffset + 2 * sizeof(uint32_t);
-  encodeBranch26(&buf32[2], {nullptr, "objc_msgSend stub"},
+  encodeBranch26(ctx,&buf32[2], {nullptr, "objc_msgSend stub"},
                  objcStubsSmallCode[2], msgSendStubVA - pcVA);
 }
 

@@ -25,7 +25,7 @@ struct LLDDWARFSection final : public llvm::DWARFSection {
 
 template <class ELFT> class LLDDwarfObj final : public llvm::DWARFObject {
 public:
-  explicit LLDDwarfObj(ObjFile<ELFT> *obj);
+  explicit LLDDwarfObj(Ctx &ctx, ObjFile<ELFT> *obj);
 
   void forEachInfoSections(
       llvm::function_ref<void(const llvm::DWARFSection &)> f) const override {
@@ -85,7 +85,7 @@ private:
   std::optional<llvm::RelocAddrEntry> findAux(const InputSectionBase &sec,
                                               uint64_t pos,
                                               ArrayRef<RelTy> rels) const;
-
+  Ctx &ctx;
   LLDDWARFSection gnuPubnamesSection;
   LLDDWARFSection gnuPubtypesSection;
   LLDDWARFSection infoSection;

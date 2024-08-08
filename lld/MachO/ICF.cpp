@@ -9,6 +9,7 @@
 #include "ICF.h"
 #include "ConcatOutputSection.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputSection.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
@@ -31,7 +32,7 @@ static constexpr bool verboseDiagnostics = false;
 class ICF {
 public:
   ICF(std::vector<ConcatInputSection *> &inputs);
-  void run();
+  void run(Ctx&ctx);
 
   using EqualsFn = bool (ICF::*)(const ConcatInputSection *,
                                  const ConcatInputSection *);
@@ -281,7 +282,7 @@ void ICF::forEachClass(llvm::function_ref<void(size_t, size_t)> func) {
   ++icfPass;
 }
 
-void ICF::run() {
+void ICF::run(Ctx&ctx) {
   // Into each origin-section hash, combine all reloc referent section hashes.
   for (icfPass = 0; icfPass < 2; ++icfPass) {
     parallelForEach(icfInputs, [&](ConcatInputSection *isec) {
@@ -325,10 +326,10 @@ void ICF::run() {
       segregate(begin, end, &ICF::equalsVariable);
     });
   } while (icfRepeat);
-  log("ICF needed " + Twine(icfPass) + " iterations");
+  ctx.log("ICF needed " + Twine(icfPass) + " iterations");
   if (verboseDiagnostics) {
-    log("equalsConstant() called " + Twine(equalsConstantCount) + " times");
-    log("equalsVariable() called " + Twine(equalsVariableCount) + " times");
+    ctx.log("equalsConstant() called " + Twine(equalsConstantCount) + " times");
+    ctx.log("equalsVariable() called " + Twine(equalsVariableCount) + " times");
   }
 
   // Fold sections within equivalence classes
@@ -372,9 +373,9 @@ void macho::markSymAsAddrSig(Symbol *s) {
       d->isec->keepUnique = true;
 }
 
-void macho::markAddrSigSymbols() {
+void macho::markAddrSigSymbols(Ctx&ctx) {
   TimeTraceScope timeScope("Mark addrsig symbols");
-  for (InputFile *file : inputFiles) {
+  for (InputFile *file : ctx.inputFiles) {
     ObjFile *obj = dyn_cast<ObjFile>(file);
     if (!obj)
       continue;
@@ -390,12 +391,12 @@ void macho::markAddrSigSymbols() {
       if (auto *sym = r.referent.dyn_cast<Symbol *>())
         markSymAsAddrSig(sym);
       else
-        error(toString(isec) + ": unexpected section relocation");
+        ctx.error(toString(isec) + ": unexpected section relocation");
     }
   }
 }
 
-void macho::foldIdenticalSections(bool onlyCfStrings) {
+void macho::foldIdenticalSections(Ctx&ctx, bool onlyCfStrings) {
   TimeTraceScope timeScope("Fold Identical Code Sections");
   // The ICF equivalence-class segregation algorithm relies on pre-computed
   // hashes of InputSection::data for the ConcatOutputSection::inputs and all
@@ -412,8 +413,8 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
   // someone keep the numbers straight in case we ever need to debug the
   // ICF::segregate()
   std::vector<ConcatInputSection *> foldable;
-  uint64_t icfUniqueID = inputSections.size();
-  for (ConcatInputSection *isec : inputSections) {
+  uint64_t icfUniqueID = ctx.inputSections.size();
+  for (ConcatInputSection *isec : ctx.inputSections) {
     bool isFoldableWithAddendsRemoved = isCfStringSection(isec) ||
                                         isClassRefsSection(isec) ||
                                         isSelRefsSection(isec);
@@ -441,9 +442,9 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
       if (isFoldableWithAddendsRemoved) {
         // We have to do this copying serially as the BumpPtrAllocator is not
         // thread-safe. FIXME: Make a thread-safe allocator.
-        MutableArrayRef<uint8_t> copy = isec->data.copy(bAlloc());
+        MutableArrayRef<uint8_t> copy = isec->data.copy(ctx.bAlloc);
         for (const Reloc &r : isec->relocs)
-          target->relocateOne(copy.data() + r.offset, r, /*va=*/0,
+          ctx.target->relocateOne(copy.data() + r.offset, r, /*va=*/0,
                               /*relocVA=*/0);
         isec->data = copy;
       }
@@ -461,5 +462,5 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
   });
   // Now that every input section is either hashed or marked as unique, run the
   // segregation algorithm to detect foldable subsections.
-  ICF(foldable).run();
+  ICF(foldable).run(ctx);
 }

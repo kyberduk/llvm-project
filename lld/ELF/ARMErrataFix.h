@@ -9,12 +9,13 @@
 #ifndef LLD_ELF_ARMA8ERRATAFIX_H
 #define LLD_ELF_ARMA8ERRATAFIX_H
 
+#include "Config.h"
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include <vector>
 
 namespace lld::elf {
-
+class Ctx;
 class Defined;
 class InputSection;
 class InputSectionDescription;
@@ -22,6 +23,8 @@ class Patch657417Section;
 
 class ARMErr657417Patcher {
 public:
+  ARMErr657417Patcher(Ctx &c) : ctx(c) {}
+
   // Return true if Patches have been added to the OutputSections.
   bool createFixes();
 
@@ -33,6 +36,8 @@ private:
                      std::vector<Patch657417Section *> &patches);
 
   void init();
+
+  Ctx &ctx;
 
   // A cache of the mapping symbols defined by the InputSection sorted in order
   // of ascending value with redundant symbols removed. These describe

@@ -21,15 +21,15 @@
 #include <type_traits>
 
 namespace lld::macho {
-
+class Ctx;
 class DylibFile;
 class InputFile;
 
 class MachOOptTable : public llvm::opt::GenericOptTable {
 public:
   MachOOptTable();
-  llvm::opt::InputArgList parse(ArrayRef<const char *> argv);
-  void printHelp(const char *argv0, bool showHidden) const;
+  llvm::opt::InputArgList parse(Ctx&ctx, ArrayRef<const char *> argv);
+  void printHelp(Ctx&ctx, const char *argv0, bool showHidden) const;
 };
 
 // Create enum with OPT_xxx values for each option in Options.td
@@ -40,34 +40,33 @@ enum {
 #undef OPTION
 };
 
-void parseLCLinkerOption(llvm::SmallVectorImpl<StringRef> &LCLinkerOptions,
+void parseLCLinkerOption(Ctx&ctx,llvm::SmallVectorImpl<StringRef> &LCLinkerOptions,
                          InputFile *f, unsigned argc, StringRef data);
-void resolveLCLinkerOptions();
+void resolveLCLinkerOptions(Ctx&ctx);
 
-std::string createResponseFile(const llvm::opt::InputArgList &args);
+std::string createResponseFile(Ctx&ctx,const llvm::opt::InputArgList &args);
 
 // Check for both libfoo.dylib and libfoo.tbd (in that order).
-std::optional<StringRef> resolveDylibPath(llvm::StringRef path);
+std::optional<StringRef> resolveDylibPath(Ctx&ctx,llvm::StringRef path);
 
-DylibFile *loadDylib(llvm::MemoryBufferRef mbref, DylibFile *umbrella = nullptr,
+DylibFile *loadDylib(Ctx&ctx,llvm::MemoryBufferRef mbref, DylibFile *umbrella = nullptr,
                      bool isBundleLoader = false,
                      bool explicitlyLinked = false);
-void resetLoadedDylibs();
 
 // Search for all possible combinations of `{root}/{name}.{extension}`.
 // If \p extensions are not specified, then just search for `{root}/{name}`.
 std::optional<llvm::StringRef>
-findPathCombination(const llvm::Twine &name,
+findPathCombination(Ctx&ctx,const llvm::Twine &name,
                     const std::vector<llvm::StringRef> &roots,
                     ArrayRef<llvm::StringRef> extensions = {""});
 
 // If -syslibroot is specified, absolute paths to non-object files may be
 // rerooted.
-llvm::StringRef rerootPath(llvm::StringRef path);
+llvm::StringRef rerootPath(Ctx&ctx,llvm::StringRef path);
 
-uint32_t getModTime(llvm::StringRef path);
+uint32_t getModTime(Ctx&ctx,llvm::StringRef path);
 
-void printArchiveMemberLoad(StringRef reason, const InputFile *);
+void printArchiveMemberLoad(Ctx&ctx,StringRef reason, const InputFile *);
 
 // Map simulator platforms to their underlying device platform.
 llvm::MachO::PlatformType removeSimulator(llvm::MachO::PlatformType platform);
@@ -75,7 +74,7 @@ llvm::MachO::PlatformType removeSimulator(llvm::MachO::PlatformType platform);
 // Helper class to export dependency info.
 class DependencyTracker {
 public:
-  explicit DependencyTracker(llvm::StringRef path);
+  explicit DependencyTracker(Ctx&ctx,llvm::StringRef path);
 
   // Adds the given path to the set of not-found files.
   inline void logFileNotFound(const Twine &path) {
@@ -101,6 +100,8 @@ private:
     Output = 0x40,
   };
 
+  Ctx&ctx;
+
   const llvm::StringRef path;
   bool active;
 
@@ -109,8 +110,6 @@ private:
   // constructed.
   std::set<std::string> notFounds;
 };
-
-extern std::unique_ptr<DependencyTracker> depTracker;
 
 } // namespace lld::macho
 

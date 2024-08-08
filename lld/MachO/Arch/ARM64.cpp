@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Arch/ARM64Common.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
@@ -30,7 +31,7 @@ using namespace lld::macho;
 namespace {
 
 struct ARM64 : ARM64Common {
-  ARM64();
+  ARM64(Ctx &ctx);
   void writeStub(uint8_t *buf, const Symbol &, uint64_t) const override;
   void writeStubHelperHeader(uint8_t *buf) const override;
   void writeStubHelperEntry(uint8_t *buf, const Symbol &,
@@ -79,7 +80,7 @@ static constexpr uint32_t stubCode[] = {
 
 void ARM64::writeStub(uint8_t *buf8, const Symbol &sym,
                       uint64_t pointerVA) const {
-  ::writeStub(buf8, stubCode, sym, pointerVA);
+  ::writeStub(ctx, buf8, stubCode, sym, pointerVA);
 }
 
 static constexpr uint32_t stubHelperHeaderCode[] = {
@@ -92,7 +93,7 @@ static constexpr uint32_t stubHelperHeaderCode[] = {
 };
 
 void ARM64::writeStubHelperHeader(uint8_t *buf8) const {
-  ::writeStubHelperHeader<LP64>(buf8, stubHelperHeaderCode);
+  ::writeStubHelperHeader<LP64>(ctx, buf8, stubHelperHeaderCode);
 }
 
 static constexpr uint32_t stubHelperEntryCode[] = {
@@ -103,7 +104,7 @@ static constexpr uint32_t stubHelperEntryCode[] = {
 
 void ARM64::writeStubHelperEntry(uint8_t *buf8, const Symbol &sym,
                                  uint64_t entryVA) const {
-  ::writeStubHelperEntry(buf8, stubHelperEntryCode, sym, entryVA);
+  ::writeStubHelperEntry(ctx, buf8, stubHelperEntryCode, sym, entryVA);
 }
 
 static constexpr uint32_t objcStubsFastCode[] = {
@@ -131,26 +132,26 @@ void ARM64::writeObjCMsgSendStub(uint8_t *buf, Symbol *sym, uint64_t stubsAddr,
   uint64_t objcStubSize;
   uint64_t objcMsgSendIndex;
 
-  if (config->objcStubsMode == ObjCStubsMode::fast) {
-    objcStubSize = target->objcStubsFastSize;
-    objcMsgSendAddr = in.got->addr;
+  if (ctx.config->objcStubsMode == ObjCStubsMode::fast) {
+    objcStubSize = ctx.target->objcStubsFastSize;
+    objcMsgSendAddr = ctx.in.got->addr;
     objcMsgSendIndex = objcMsgSend->gotIndex;
-    ::writeObjCMsgSendFastStub<LP64>(buf, objcStubsFastCode, sym, stubsAddr,
-                                     stubOffset, selrefsVA, selectorIndex,
-                                     objcMsgSendAddr, objcMsgSendIndex);
+    ::writeObjCMsgSendFastStub<LP64>(
+        ctx, buf, objcStubsFastCode, sym, stubsAddr, stubOffset, selrefsVA,
+        selectorIndex, objcMsgSendAddr, objcMsgSendIndex);
   } else {
-    assert(config->objcStubsMode == ObjCStubsMode::small);
-    objcStubSize = target->objcStubsSmallSize;
+    assert(ctx.config->objcStubsMode == ObjCStubsMode::small);
+    objcStubSize = ctx.target->objcStubsSmallSize;
     if (auto *d = dyn_cast<Defined>(objcMsgSend)) {
       objcMsgSendAddr = d->getVA();
       objcMsgSendIndex = 0;
     } else {
-      objcMsgSendAddr = in.stubs->addr;
+      objcMsgSendAddr = ctx.in.stubs->addr;
       objcMsgSendIndex = objcMsgSend->stubsIndex;
     }
-    ::writeObjCMsgSendSmallStub<LP64>(buf, objcStubsSmallCode, sym, stubsAddr,
-                                      stubOffset, selrefsVA, selectorIndex,
-                                      objcMsgSendAddr, objcMsgSendIndex);
+    ::writeObjCMsgSendSmallStub<LP64>(
+        ctx, buf, objcStubsSmallCode, sym, stubsAddr, stubOffset, selrefsVA,
+        selectorIndex, objcMsgSendAddr, objcMsgSendIndex);
   }
   stubOffset += objcStubSize;
 }
@@ -178,7 +179,7 @@ void ARM64::populateThunk(InputSection *thunk, Symbol *funcSym) {
                              /*referent=*/funcSym);
 }
 
-ARM64::ARM64() : ARM64Common(LP64()) {
+ARM64::ARM64(Ctx &ctx) : ARM64Common(ctx, LP64()) {
   cpuType = CPU_TYPE_ARM64;
   cpuSubtype = CPU_SUBTYPE_ARM64_ALL;
 
@@ -659,8 +660,8 @@ void ARM64::applyOptimizationHints(uint8_t *outBuf, const ObjFile &obj) const {
 
   auto isValidOffset = [&](uint64_t offset) {
     if (offset < sectionAddr || offset >= sectionAddr + section->getSize()) {
-      error(toString(&obj) +
-            ": linker optimization hint spans multiple sections");
+      ctx.error(toString(&obj) +
+                ": linker optimization hint spans multiple sections");
       return false;
     }
     return true;
@@ -744,7 +745,4 @@ void ARM64::applyOptimizationHints(uint8_t *outBuf, const ObjFile &obj) const {
   });
 }
 
-TargetInfo *macho::createARM64TargetInfo() {
-  static ARM64 t;
-  return &t;
-}
+TargetInfo *macho::createARM64TargetInfo(Ctx &ctx) { return new ARM64(ctx); }

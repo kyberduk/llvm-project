@@ -8,6 +8,7 @@
 
 #include "InputChunks.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "OutputSegment.h"
 #include "WriterUtils.h"
 #include "lld/Common/ErrorHandler.h"
@@ -67,7 +68,7 @@ uint32_t InputChunk::getSize() const {
     return ms->builder.getSize();
 
   if (const auto *f = dyn_cast<InputFunction>(this)) {
-    if (config->compressRelocations && f->file) {
+    if (ctx.config->compressRelocations && f->file) {
       return f->getCompressedSize();
     }
   }
@@ -84,7 +85,7 @@ uint32_t InputChunk::getInputSize() const {
 // Copy this input chunk to an mmap'ed output file and apply relocations.
 void InputChunk::writeTo(uint8_t *buf) const {
   if (const auto *f = dyn_cast<InputFunction>(this)) {
-    if (file && config->compressRelocations)
+    if (file && ctx.config->compressRelocations)
       return f->writeCompressed(buf);
   } else if (const auto *ms = dyn_cast<SyntheticMergedChunk>(this)) {
     ms->builder.write(buf + outSecOff);
@@ -196,6 +197,14 @@ uint64_t InputChunk::getTombstone() const {
   return 0;
 }
 
+SectionPiece::SectionPiece(Ctx&ctx,size_t off, uint32_t hash, bool live)
+    : inputOff(off), live(live || !ctx.config->gcSections), hash(hash >> 1) {}
+
+InputChunk::InputChunk(Ctx&c,ObjFile *f, Kind k, StringRef name, uint32_t alignment,
+                       uint32_t flags)
+    :ctx(c), name(name), file(f), alignment(alignment), flags(flags), sectionKind(k),
+      live(!ctx.config->gcSections), discarded(false) {}
+
 void InputFunction::setFunctionIndex(uint32_t index) {
   LLVM_DEBUG(dbgs() << "InputFunction::setFunctionIndex: " << name << " -> "
                     << index << "\n");
@@ -269,7 +278,7 @@ static unsigned getRelocWidth(const WasmRelocation &rel, uint64_t value) {
 // This function only computes the final output size.  It must be called
 // before getSize() is used to calculate of layout of the code section.
 void InputFunction::calculateSize() {
-  if (!file || !config->compressRelocations)
+  if (!file || !ctx.config->compressRelocations)
     return;
 
   LLVM_DEBUG(dbgs() << "calculateSize: " << name << "\n");
@@ -365,7 +374,7 @@ void InputChunk::generateRelocationCode(raw_ostream &os) const {
   LLVM_DEBUG(dbgs() << "generating runtime relocations: " << name
                     << " count=" << relocations.size() << "\n");
 
-  bool is64 = config->is64.value_or(false);
+  bool is64 = ctx.config->is64.value_or(false);
   unsigned opcode_ptr_const = is64 ? WASM_OPCODE_I64_CONST
                                    : WASM_OPCODE_I32_CONST;
   unsigned opcode_ptr_add = is64 ? WASM_OPCODE_I64_ADD
@@ -393,9 +402,9 @@ void InputChunk::generateRelocationCode(raw_ostream &os) const {
     if (ctx.isPic) {
       writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
       if (isTLS())
-        writeUleb128(os, WasmSym::tlsBase->getGlobalIndex(), "tls_base");
+        writeUleb128(os, ctx.ws.tlsBase->getGlobalIndex(), "tls_base");
       else
-        writeUleb128(os, WasmSym::memoryBase->getGlobalIndex(), "memory_base");
+        writeUleb128(os, ctx.ws.memoryBase->getGlobalIndex(), "memory_base");
       writeU8(os, opcode_ptr_add, "ADD");
     }
 
@@ -418,12 +427,12 @@ void InputChunk::generateRelocationCode(raw_ostream &os) const {
       }
     } else {
       assert(ctx.isPic);
-      const GlobalSymbol* baseSymbol = WasmSym::memoryBase;
+      const GlobalSymbol* baseSymbol = ctx.ws.memoryBase;
       if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
           rel.Type == R_WASM_TABLE_INDEX_I64)
-        baseSymbol = WasmSym::tableBase;
+        baseSymbol = ctx.ws.tableBase;
       else if (sym->isTLS())
-        baseSymbol = WasmSym::tlsBase;
+        baseSymbol = ctx.ws.tlsBase;
       writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
       writeUleb128(os, baseSymbol->getGlobalIndex(), "base");
       writeU8(os, opcode_reloc_const, "CONST");
@@ -448,10 +457,10 @@ void MergeInputChunk::splitStrings(ArrayRef<uint8_t> data) {
   while (!s.empty()) {
     size_t end = s.find(0);
     if (end == StringRef::npos)
-      fatal(toString(this) + ": string is not null terminated");
+      ctx.fatal(toString(this) + ": string is not null terminated");
     size_t size = end + 1;
 
-    pieces.emplace_back(off, xxh3_64bits(s.substr(0, size)), true);
+    pieces.emplace_back(ctx,off, xxh3_64bits(s.substr(0, size)), true);
     s = s.substr(size);
     off += size;
   }
@@ -473,7 +482,7 @@ void MergeInputChunk::splitIntoPieces() {
 
 SectionPiece *MergeInputChunk::getSectionPiece(uint64_t offset) {
   if (this->data().size() <= offset)
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.fatal(toString(this) + ": offset is outside the section");
 
   // If Offset is not at beginning of a section piece, it is not in the map.
   // In that case we need to  do a binary search of the original section piece
@@ -519,7 +528,7 @@ uint64_t InputSection::getTombstoneForSection(StringRef name) {
   // If they occur in DWARF debug symbols, we want to change the pc of the
   // function to -1 to avoid overlapping with a valid range. However for the
   // debug_ranges and debug_loc sections that would conflict with the existing
-  // meaning of -1 so we use -2.  
+  // meaning of -1 so we use -2.
   if (name.equals(".debug_ranges") || name.equals(".debug_loc"))
     return UINT64_C(-2);
   if (name.starts_with(".debug_"))

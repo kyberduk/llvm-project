@@ -31,6 +31,7 @@
 #include "MapFile.h"
 #include "ConcatOutputSection.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "InputSection.h"
 #include "OutputSegment.h"
@@ -61,9 +62,9 @@ struct MapInfo {
   SmallVector<CStringInfo> deadCStrings;
 };
 
-static MapInfo gatherMapInfo() {
+static MapInfo gatherMapInfo(Ctx&ctx) {
   MapInfo info;
-  for (InputFile *file : inputFiles) {
+  for (InputFile *file : ctx.inputFiles) {
     bool isReferencedFile = false;
 
     if (isa<ObjFile>(file) || isa<BitcodeFile>(file)) {
@@ -132,18 +133,18 @@ static void printFileName(raw_fd_ostream &os, const InputFile *f) {
 }
 
 // For printing the contents of the __stubs and __la_symbol_ptr sections.
-static void printStubsEntries(
+static void printStubsEntries(Ctx&ctx,
     raw_fd_ostream &os,
     const DenseMap<lld::macho::InputFile *, uint32_t> &readerToFileOrdinal,
     const OutputSection *osec, size_t entrySize) {
-  for (const Symbol *sym : in.stubs->getEntries())
+  for (const Symbol *sym : ctx.in.stubs->getEntries())
     os << format("0x%08llX\t0x%08zX\t[%3u] %s\n",
                  osec->addr + sym->stubsIndex * entrySize, entrySize,
                  readerToFileOrdinal.lookup(sym->getFile()),
                  sym->getName().str().data());
 }
 
-static void printNonLazyPointerSection(raw_fd_ostream &os,
+static void printNonLazyPointerSection(Ctx&ctx,raw_fd_ostream &os,
                                        NonLazyPointerSectionBase *osec) {
   // ld64 considers stubs to belong to particular files, but considers GOT
   // entries to be linker-synthesized. Not sure why they made that decision, but
@@ -151,29 +152,29 @@ static void printNonLazyPointerSection(raw_fd_ostream &os,
   // associations.
   for (const Symbol *sym : osec->getEntries())
     os << format("0x%08llX\t0x%08zX\t[  0] non-lazy-pointer-to-local: %s\n",
-                 osec->addr + sym->gotIndex * target->wordSize,
-                 target->wordSize, sym->getName().str().data());
+                 osec->addr + sym->gotIndex * ctx.target->wordSize,
+                 ctx.target->wordSize, sym->getName().str().data());
 }
 
-void macho::writeMapFile() {
-  if (config->mapFile.empty())
+void macho::writeMapFile(Ctx&ctx) {
+  if (ctx.config->mapFile.empty())
     return;
 
   TimeTraceScope timeScope("Write map file");
 
   // Open a map file for writing.
   std::error_code ec;
-  raw_fd_ostream os(config->mapFile, ec, sys::fs::OF_None);
+  raw_fd_ostream os(ctx.config->mapFile, ec, sys::fs::OF_None);
   if (ec) {
-    error("cannot open " + config->mapFile + ": " + ec.message());
+    ctx.error("cannot open " + ctx.config->mapFile + ": " + ec.message());
     return;
   }
 
-  os << format("# Path: %s\n", config->outputFile.str().c_str());
+  os << format("# Path: %s\n", ctx.config->outputFile.str().c_str());
   os << format("# Arch: %s\n",
-               getArchitectureName(config->arch()).str().c_str());
+               getArchitectureName(ctx.config->arch()).str().c_str());
 
-  MapInfo info = gatherMapInfo();
+  MapInfo info = gatherMapInfo(ctx);
 
   os << "# Object files:\n";
   os << format("[%3u] %s\n", 0, (const char *)"linker synthesized");
@@ -188,7 +189,7 @@ void macho::writeMapFile() {
 
   os << "# Sections:\n";
   os << "# Address\tSize    \tSegment\tSection\n";
-  for (OutputSegment *seg : outputSegments)
+  for (OutputSegment *seg : ctx.outputSegments)
     for (OutputSection *osec : seg->getSections()) {
       if (osec->isHidden())
         continue;
@@ -199,7 +200,7 @@ void macho::writeMapFile() {
 
   os << "# Symbols:\n";
   os << "# Address\tSize    \tFile  Name\n";
-  for (const OutputSegment *seg : outputSegments) {
+  for (const OutputSegment *seg : ctx.outputSegments) {
     for (const OutputSection *osec : seg->getSections()) {
       if (auto *concatOsec = dyn_cast<ConcatOutputSection>(osec)) {
         for (const InputSection *isec : concatOsec->inputs) {
@@ -209,7 +210,7 @@ void macho::writeMapFile() {
                            sym->size, readerToFileOrdinal[sym->getFile()],
                            sym->getName().str().data());
         }
-      } else if (osec == in.cStringSection || osec == in.objcMethnameSection) {
+      } else if (osec == ctx.in.cStringSection || osec == ctx.in.objcMethnameSection) {
         const auto &liveCStrings = info.liveCStringsForSection.lookup(osec);
         uint64_t lastAddr = 0; // strings will never start at address 0, so this
                                // is a sentinel value
@@ -222,27 +223,27 @@ void macho::writeMapFile() {
                        info.fileIndex);
           os.write_escaped(info.str) << "\n";
         }
-      } else if (osec == (void *)in.unwindInfo) {
+      } else if (osec == (void *)ctx.in.unwindInfo) {
         os << format("0x%08llX\t0x%08llX\t[  0] compact unwind info\n",
                      osec->addr, osec->getSize());
-      } else if (osec == in.stubs) {
-        printStubsEntries(os, readerToFileOrdinal, osec, target->stubSize);
-      } else if (osec == in.lazyPointers) {
-        printStubsEntries(os, readerToFileOrdinal, osec, target->wordSize);
-      } else if (osec == in.stubHelper) {
+      } else if (osec == ctx.in.stubs) {
+        printStubsEntries(ctx,os, readerToFileOrdinal, osec, ctx.target->stubSize);
+      } else if (osec == ctx.in.lazyPointers) {
+        printStubsEntries(ctx,os, readerToFileOrdinal, osec, ctx.target->wordSize);
+      } else if (osec == ctx.in.stubHelper) {
         // yes, ld64 calls it "helper helper"...
         os << format("0x%08llX\t0x%08llX\t[  0] helper helper\n", osec->addr,
                      osec->getSize());
-      } else if (osec == in.got) {
-        printNonLazyPointerSection(os, in.got);
-      } else if (osec == in.tlvPointers) {
-        printNonLazyPointerSection(os, in.tlvPointers);
+      } else if (osec == ctx.in.got) {
+        printNonLazyPointerSection(ctx,os, ctx.in.got);
+      } else if (osec == ctx.in.tlvPointers) {
+        printNonLazyPointerSection(ctx,os, ctx.in.tlvPointers);
       }
       // TODO print other synthetic sections
     }
   }
 
-  if (config->deadStrip) {
+  if (ctx.config->deadStrip) {
     os << "# Dead Stripped Symbols:\n";
     os << "#        \tSize    \tFile  Name\n";
     for (Defined *sym : info.deadSymbols) {

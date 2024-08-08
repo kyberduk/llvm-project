@@ -9,8 +9,8 @@
 #ifndef LLD_ELF_THUNKS_H
 #define LLD_ELF_THUNKS_H
 
-#include "llvm/ADT/SmallVector.h"
 #include "Relocations.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace lld::elf {
 class Defined;
@@ -28,7 +28,7 @@ class ThunkSection;
 // Thunks are assigned to synthetic ThunkSections
 class Thunk {
 public:
-  Thunk(Symbol &destination, int64_t addend);
+  Thunk(Ctx &ctx, Symbol &destination, int64_t addend);
   virtual ~Thunk();
 
   virtual uint32_t size() = 0;
@@ -56,6 +56,8 @@ public:
 
   Defined *getThunkTargetSym() const { return syms[0]; }
 
+  Ctx &ctx;
+
   Symbol &destination;
   int64_t addend;
   llvm::SmallVector<Defined *, 3> syms;
@@ -67,11 +69,11 @@ public:
 
 // For a Relocation to symbol S create a Thunk to be added to a synthetic
 // ThunkSection.
-Thunk *addThunk(const InputSection &isec, Relocation &rel);
+Thunk *addThunk(Ctx &ctx, const InputSection &isec, Relocation &rel);
 
-void writePPC32PltCallStub(uint8_t *buf, uint64_t gotPltVA,
+void writePPC32PltCallStub(Ctx &ctx, uint8_t *buf, uint64_t gotPltVA,
                            const InputFile *file, int64_t addend);
-void writePPC64LoadAndBranch(uint8_t *buf, int64_t offset);
+void writePPC64LoadAndBranch(Ctx &ctx, uint8_t *buf, int64_t offset);
 
 } // namespace lld::elf
 

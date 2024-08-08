@@ -19,7 +19,7 @@ class InputSegment;
 
 class OutputSegment {
 public:
-  OutputSegment(StringRef n) : name(n) {}
+  OutputSegment(Ctx&c,StringRef n) : ctx(c),name(n) {}
 
   void addInputSegment(InputChunk *inSeg);
   void finalizeInputSegments();
@@ -27,10 +27,10 @@ public:
   // to the output binary.  However if the memory is imported, and
   // we can't use memory.fill during startup (due to lack of bulk
   // memory feature) then we include BSS segments verbatim.
-  bool requiredInBinary() const { return !isBss || ctx.emitBssSegments; }
+  bool requiredInBinary() const;
 
   bool isTLS() const { return name == ".tdata"; }
-
+Ctx&ctx;
   StringRef name;
   bool isBss = false;
   uint32_t index = 0;

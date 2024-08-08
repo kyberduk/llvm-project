@@ -17,7 +17,7 @@
 #include <vector>
 
 namespace lld::coff {
-static const int pageSize = 4096;
+static constexpr int pageSize = 4096;
 class COFFLinkerContext;
 
 void writeResult(COFFLinkerContext &ctx);

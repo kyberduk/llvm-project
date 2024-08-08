@@ -10,10 +10,10 @@
 #define LLD_WASM_RELOCATIONS_H
 
 namespace lld::wasm {
-
+class Ctx;
 class InputChunk;
 
-void scanRelocations(InputChunk *chunk);
+void scanRelocations(Ctx&ctx,InputChunk *chunk);
 
 } // namespace lld::wasm
 

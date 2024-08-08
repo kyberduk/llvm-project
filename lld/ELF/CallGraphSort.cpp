@@ -24,6 +24,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CallGraphSort.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "InputSection.h"
 #include "Symbols.h"
@@ -88,11 +89,12 @@ struct Cluster {
 /// * Sort non-empty clusters by density
 class CallGraphSort {
 public:
-  CallGraphSort();
+  CallGraphSort(Ctx &ctx);
 
   DenseMap<const InputSectionBase *, int> run();
 
 private:
+  Ctx &ctx;
   std::vector<Cluster> clusters;
   std::vector<const InputSectionBase *> sections;
 };
@@ -111,15 +113,15 @@ using SectionPair =
 // Take the edge list in Config->CallGraphProfile, resolve symbol names to
 // Symbols, and generate a graph between InputSections with the provided
 // weights.
-CallGraphSort::CallGraphSort() {
-  MapVector<SectionPair, uint64_t> &profile = config->callGraphProfile;
+CallGraphSort::CallGraphSort(Ctx &c) : ctx(c) {
+  MapVector<SectionPair, uint64_t> &profile = ctx.config->callGraphProfile;
   DenseMap<const InputSectionBase *, int> secToCluster;
 
   auto getOrCreateNode = [&](const InputSectionBase *isec) -> int {
     auto res = secToCluster.try_emplace(isec, clusters.size());
     if (res.second) {
       sections.push_back(isec);
-      clusters.emplace_back(clusters.size(), isec->getSize());
+      clusters.emplace_back(clusters.size(), isec->getSize(ctx));
     }
     return res.first->second;
   };
@@ -243,11 +245,12 @@ DenseMap<const InputSectionBase *, int> CallGraphSort::run() {
         break;
     }
   }
-  if (!config->printSymbolOrder.empty()) {
+  if (!ctx.config->printSymbolOrder.empty()) {
     std::error_code ec;
-    raw_fd_ostream os(config->printSymbolOrder, ec, sys::fs::OF_None);
+    raw_fd_ostream os(ctx.config->printSymbolOrder, ec, sys::fs::OF_None);
     if (ec) {
-      error("cannot open " + config->printSymbolOrder + ": " + ec.message());
+      ctx.error("cannot open " + ctx.config->printSymbolOrder + ": " +
+                ec.message());
       return orderMap;
     }
 
@@ -274,7 +277,8 @@ DenseMap<const InputSectionBase *, int> CallGraphSort::run() {
 // Sort sections by the profile data using the Cache-Directed Sort algorithm.
 // The placement is done by optimizing the locality by co-locating frequently
 // executed code sections together.
-DenseMap<const InputSectionBase *, int> elf::computeCacheDirectedSortOrder() {
+DenseMap<const InputSectionBase *, int>
+elf::computeCacheDirectedSortOrder(Ctx &ctx) {
   SmallVector<uint64_t, 0> funcSizes;
   SmallVector<uint64_t, 0> funcCounts;
   SmallVector<codelayout::EdgeCount, 0> callCounts;
@@ -287,14 +291,14 @@ DenseMap<const InputSectionBase *, int> elf::computeCacheDirectedSortOrder() {
     if (res.second) {
       // inSec does not appear before in the graph.
       sections.push_back(inSec);
-      funcSizes.push_back(inSec->getSize());
+      funcSizes.push_back(inSec->getSize(ctx));
       funcCounts.push_back(0);
     }
     return res.first->second;
   };
 
   // Create the graph.
-  for (std::pair<SectionPair, uint64_t> &c : config->callGraphProfile) {
+  for (std::pair<SectionPair, uint64_t> &c : ctx.config->callGraphProfile) {
     const InputSectionBase *fromSB = cast<InputSectionBase>(c.first.first);
     const InputSectionBase *toSB = cast<InputSectionBase>(c.first.second);
     // Ignore edges between input sections belonging to different sections.
@@ -336,8 +340,9 @@ DenseMap<const InputSectionBase *, int> elf::computeCacheDirectedSortOrder() {
 //
 // This first builds a call graph based on the profile data then merges sections
 // according either to the C³ or Cache-Directed-Sort ordering algorithm.
-DenseMap<const InputSectionBase *, int> elf::computeCallGraphProfileOrder() {
-  if (config->callGraphProfileSort == CGProfileSortKind::Cdsort)
-    return computeCacheDirectedSortOrder();
-  return CallGraphSort().run();
+DenseMap<const InputSectionBase *, int>
+elf::computeCallGraphProfileOrder(Ctx &ctx) {
+  if (ctx.config->callGraphProfileSort == CGProfileSortKind::Cdsort)
+    return computeCacheDirectedSortOrder(ctx);
+  return CallGraphSort(ctx).run();
 }

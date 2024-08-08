@@ -8,6 +8,7 @@
 
 #include "Symbols.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputChunks.h"
 #include "InputElement.h"
 #include "InputFiles.h"
@@ -26,16 +27,16 @@ using namespace llvm::wasm;
 using namespace lld::wasm;
 
 namespace lld {
-std::string toString(const wasm::Symbol &sym) {
-  return maybeDemangleSymbol(sym.getName());
+std::string toString(wasm::Ctx &ctx, const wasm::Symbol &sym) {
+  return maybeDemangleSymbol(ctx, sym.getName());
 }
 
-std::string maybeDemangleSymbol(StringRef name) {
+std::string maybeDemangleSymbol(Ctx &ctx, StringRef name) {
   // WebAssembly requires caller and callee signatures to match, so we mangle
   // `main` in the case where we need to pass it arguments.
   if (name == "__main_argc_argv")
     return "main";
-  if (wasm::config->demangle)
+  if (ctx.config->demangle)
     return demangle(name);
   return name.str();
 }
@@ -73,34 +74,6 @@ std::string toString(wasm::Symbol::Kind kind) {
 }
 
 namespace wasm {
-DefinedFunction *WasmSym::callCtors;
-DefinedFunction *WasmSym::callDtors;
-DefinedFunction *WasmSym::initMemory;
-DefinedFunction *WasmSym::applyDataRelocs;
-DefinedFunction *WasmSym::applyGlobalRelocs;
-DefinedFunction *WasmSym::applyTLSRelocs;
-DefinedFunction *WasmSym::applyGlobalTLSRelocs;
-DefinedFunction *WasmSym::initTLS;
-DefinedFunction *WasmSym::startFunction;
-DefinedData *WasmSym::dsoHandle;
-DefinedData *WasmSym::dataEnd;
-DefinedData *WasmSym::globalBase;
-DefinedData *WasmSym::heapBase;
-DefinedData *WasmSym::heapEnd;
-DefinedData *WasmSym::initMemoryFlag;
-GlobalSymbol *WasmSym::stackPointer;
-DefinedData *WasmSym::stackLow;
-DefinedData *WasmSym::stackHigh;
-GlobalSymbol *WasmSym::tlsBase;
-GlobalSymbol *WasmSym::tlsSize;
-GlobalSymbol *WasmSym::tlsAlign;
-UndefinedGlobal *WasmSym::tableBase;
-DefinedData *WasmSym::definedTableBase;
-UndefinedGlobal *WasmSym::tableBase32;
-DefinedData *WasmSym::definedTableBase32;
-UndefinedGlobal *WasmSym::memoryBase;
-DefinedData *WasmSym::definedMemoryBase;
-TableSymbol *WasmSym::indirectFunctionTable;
 
 WasmSymbolType Symbol::getWasmType() const {
   if (isa<FunctionSymbol>(this))
@@ -119,7 +92,7 @@ WasmSymbolType Symbol::getWasmType() const {
 }
 
 const WasmSignature *Symbol::getSignature() const {
-  if (auto* f = dyn_cast<FunctionSymbol>(this))
+  if (auto *f = dyn_cast<FunctionSymbol>(this))
     return f->signature;
   if (auto *t = dyn_cast<TagSymbol>(this))
     return t->signature;
@@ -199,6 +172,12 @@ void Symbol::setGOTIndex(uint32_t index) {
   gotIndex = index;
 }
 
+Symbol::Symbol(Ctx &c, StringRef name, Kind k, uint32_t flags, InputFile *f)
+    : ctx(c), name(name), file(f), symbolKind(k),
+      referenced(!ctx.config->gcSections), requiresGOT(false),
+      isUsedInRegularObj(false), forceExport(false), forceImport(false),
+      canInline(false), traced(false), isStub(false), flags(flags) {}
+
 bool Symbol::isWeak() const {
   return (flags & WASM_SYMBOL_BINDING_MASK) == WASM_SYMBOL_BINDING_WEAK;
 }
@@ -233,10 +212,10 @@ bool Symbol::isExported() const {
   // Shared libraries must export all weakly defined symbols
   // in case they contain the version that will be chosen by
   // the dynamic linker.
-  if (config->shared && isLive() && isWeak() && !isHidden())
+  if (ctx.config->shared && isLive() && isWeak() && !isHidden())
     return true;
 
-  if (config->exportAll || (config->exportDynamic && !isHidden()))
+  if (ctx.config->exportAll || (ctx.config->exportDynamic && !isHidden()))
     return true;
 
   return isExportedExplicit();
@@ -246,9 +225,7 @@ bool Symbol::isExportedExplicit() const {
   return forceExport || flags & WASM_SYMBOL_EXPORTED;
 }
 
-bool Symbol::isNoStrip() const {
-  return flags & WASM_SYMBOL_NO_STRIP;
-}
+bool Symbol::isNoStrip() const { return flags & WASM_SYMBOL_NO_STRIP; }
 
 uint32_t FunctionSymbol::getFunctionIndex() const {
   if (const auto *u = dyn_cast<UndefinedFunction>(this))
@@ -298,9 +275,9 @@ void FunctionSymbol::setTableIndex(uint32_t index) {
   tableIndex = index;
 }
 
-DefinedFunction::DefinedFunction(StringRef name, uint32_t flags, InputFile *f,
+DefinedFunction::DefinedFunction(Ctx&ctx,StringRef name, uint32_t flags, InputFile *f,
                                  InputFunction *function)
-    : FunctionSymbol(name, DefinedFunctionKind, flags, f,
+    : FunctionSymbol(ctx,name, DefinedFunctionKind, flags, f,
                      function ? &function->signature : nullptr),
       function(function) {}
 
@@ -313,7 +290,7 @@ uint64_t DefinedData::getVA() const {
   // In the shared memory case, TLS symbols are relative to the start of the TLS
   // output segment (__tls_base).  When building without shared memory, TLS
   // symbols absolute, just like non-TLS.
-  if (isTLS() && config->sharedMemory)
+  if (isTLS() && ctx.config->sharedMemory)
     return getOutputSegmentOffset();
   if (segment)
     return segment->getVA(value);
@@ -355,9 +332,9 @@ bool GlobalSymbol::hasGlobalIndex() const {
   return globalIndex != INVALID_INDEX;
 }
 
-DefinedGlobal::DefinedGlobal(StringRef name, uint32_t flags, InputFile *file,
+DefinedGlobal::DefinedGlobal(Ctx&ctx,StringRef name, uint32_t flags, InputFile *file,
                              InputGlobal *global)
-    : GlobalSymbol(name, DefinedGlobalKind, flags, file,
+    : GlobalSymbol(ctx,name, DefinedGlobalKind, flags, file,
                    global ? &global->getType() : nullptr),
       global(global) {}
 
@@ -380,16 +357,16 @@ bool TagSymbol::hasTagIndex() const {
   return tagIndex != INVALID_INDEX;
 }
 
-DefinedTag::DefinedTag(StringRef name, uint32_t flags, InputFile *file,
+DefinedTag::DefinedTag(Ctx&ctx,StringRef name, uint32_t flags, InputFile *file,
                        InputTag *tag)
-    : TagSymbol(name, DefinedTagKind, flags, file,
+    : TagSymbol(ctx,name, DefinedTagKind, flags, file,
                 tag ? &tag->signature : nullptr),
       tag(tag) {}
 
 void TableSymbol::setLimits(const WasmLimits &limits) {
   if (auto *t = dyn_cast<DefinedTable>(this))
     t->table->setLimits(limits);
-  auto *newType = make<WasmTableType>(*tableType);
+  auto *newType = ctx.make<WasmTableType>(*tableType);
   newType->Limits = limits;
   tableType = newType;
 }
@@ -415,9 +392,9 @@ bool TableSymbol::hasTableNumber() const {
   return tableNumber != INVALID_INDEX;
 }
 
-DefinedTable::DefinedTable(StringRef name, uint32_t flags, InputFile *file,
+DefinedTable::DefinedTable(Ctx&ctx,StringRef name, uint32_t flags, InputFile *file,
                            InputTable *table)
-    : TableSymbol(name, DefinedTableKind, flags, file,
+    : TableSymbol(ctx,name, DefinedTableKind, flags, file,
                   table ? &table->getType() : nullptr),
       table(table) {}
 
@@ -429,7 +406,7 @@ const OutputSectionSymbol *SectionSymbol::getOutputSectionSymbol() const {
 void LazySymbol::extract() {
   if (file->lazy) {
     file->lazy = false;
-    symtab->addFile(file, name);
+    ctx.symtab->addFile(file, name);
   }
 }
 
@@ -437,12 +414,12 @@ void LazySymbol::setWeak() {
   flags |= (flags & ~WASM_SYMBOL_BINDING_MASK) | WASM_SYMBOL_BINDING_WEAK;
 }
 
-void printTraceSymbolUndefined(StringRef name, const InputFile* file) {
-  message(toString(file) + ": reference to " + name);
+void printTraceSymbolUndefined(Ctx&ctx,StringRef name, const InputFile *file) {
+  ctx.message(toString(file) + ": reference to " + name);
 }
 
 // Print out a log message for --trace-symbol.
-void printTraceSymbol(Symbol *sym) {
+void printTraceSymbol(Ctx&ctx,Symbol *sym) {
   // Undefined symbols are traced via printTraceSymbolUndefined
   if (sym->isUndefined())
     return;
@@ -453,12 +430,8 @@ void printTraceSymbol(Symbol *sym) {
   else
     s = ": definition of ";
 
-  message(toString(sym->getFile()) + s + sym->getName());
+  ctx.message(toString(sym->getFile()) + s + sym->getName());
 }
-
-const char *defaultModule = "env";
-const char *functionTableName = "__indirect_function_table";
-const char *memoryName = "memory";
 
 } // namespace wasm
 } // namespace lld

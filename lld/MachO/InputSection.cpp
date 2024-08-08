@@ -9,6 +9,7 @@
 #include "InputSection.h"
 #include "ConcatOutputSection.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "OutputSegment.h"
 #include "Symbols.h"
@@ -32,11 +33,9 @@ using namespace lld::macho;
 // can differ based on STL debug levels (e.g. iterator debugging on MSVC's STL),
 // so account for that.
 static_assert(sizeof(void *) != 8 ||
-                  sizeof(ConcatInputSection) == sizeof(std::vector<Reloc>) + 88,
+                  sizeof(ConcatInputSection) == sizeof(std::vector<Reloc>) + 96,
               "Try to minimize ConcatInputSection's size, we create many "
               "instances of it");
-
-std::vector<ConcatInputSection *> macho::inputSections;
 
 uint64_t InputSection::getFileSize() const {
   return isZeroFill(getFlags()) ? 0 : getSize();
@@ -46,8 +45,8 @@ uint64_t InputSection::getVA(uint64_t off) const {
   return parent->addr + getOffset(off);
 }
 
-static uint64_t resolveSymbolVA(const Symbol *sym, uint8_t type) {
-  const RelocAttrs &relocAttrs = target->getRelocAttrs(type);
+static uint64_t resolveSymbolVA(Ctx&ctx,const Symbol *sym, uint8_t type) {
+  const RelocAttrs &relocAttrs = ctx.target->getRelocAttrs(type);
   if (relocAttrs.hasAttr(RelocAttrBits::BRANCH))
     return sym->resolveBranchVA();
   if (relocAttrs.hasAttr(RelocAttrBits::GOT))
@@ -165,6 +164,12 @@ void ConcatInputSection::foldIdentical(ConcatInputSection *copy) {
   }
 }
 
+ConcatInputSection::ConcatInputSection(Ctx&ctx,const Section &section,
+                                       ArrayRef<uint8_t> data, uint32_t align)
+    : InputSection(ctx,ConcatKind, section, data, align) {
+  live = !ctx.config->deadStrip;
+}
+
 void ConcatInputSection::writeTo(uint8_t *buf) {
   assert(!shouldOmitFromOutput());
 
@@ -178,9 +183,9 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
     uint8_t *loc = buf + r.offset;
     uint64_t referentVA = 0;
 
-    const bool needsFixup = config->emitChainedFixups &&
-                            target->hasAttr(r.type, RelocAttrBits::UNSIGNED);
-    if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
+    const bool needsFixup = ctx.config->emitChainedFixups &&
+                            ctx.target->hasAttr(r.type, RelocAttrBits::UNSIGNED);
+    if (ctx.target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
       const Symbol *fromSym = r.referent.get<Symbol *>();
       const Reloc &minuend = relocs[++i];
       uint64_t minuendVA;
@@ -193,25 +198,25 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
       }
       referentVA = minuendVA - fromSym->getVA();
     } else if (auto *referentSym = r.referent.dyn_cast<Symbol *>()) {
-      if (target->hasAttr(r.type, RelocAttrBits::LOAD) &&
+      if (ctx.target->hasAttr(r.type, RelocAttrBits::LOAD) &&
           !referentSym->isInGot())
-        target->relaxGotLoad(loc, r.type);
+        ctx.target->relaxGotLoad(loc, r.type);
       // For dtrace symbols, do not handle them as normal undefined symbols
       if (referentSym->getName().starts_with("___dtrace_")) {
         // Change dtrace call site to pre-defined instructions
-        target->handleDtraceReloc(referentSym, r, loc);
+        ctx.target->handleDtraceReloc(referentSym, r, loc);
         continue;
       }
-      referentVA = resolveSymbolVA(referentSym, r.type) + r.addend;
+      referentVA = resolveSymbolVA(ctx,referentSym, r.type) + r.addend;
 
       if (isThreadLocalVariables(getFlags()) && isa<Defined>(referentSym)) {
         // References from thread-local variable sections are treated as offsets
         // relative to the start of the thread-local data memory area, which
         // is initialized via copying all the TLV data sections (which are all
         // contiguous).
-        referentVA -= firstTLVDataSection->addr;
+        referentVA -= ctx.firstTLVDataSection->addr;
       } else if (needsFixup) {
-        writeChainedFixup(loc, referentSym, r.addend);
+        writeChainedFixup(ctx,loc, referentSym, r.addend);
         continue;
       }
     } else if (auto *referentIsec = r.referent.dyn_cast<InputSection *>()) {
@@ -219,22 +224,22 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
       referentVA = referentIsec->getVA(r.addend);
 
       if (needsFixup) {
-        writeChainedRebase(loc, referentVA);
+        writeChainedRebase(ctx,loc, referentVA);
         continue;
       }
     }
-    target->relocateOne(loc, r, referentVA, getVA() + r.offset);
+    ctx.target->relocateOne(loc, r, referentVA, getVA() + r.offset);
   }
 }
 
-ConcatInputSection *macho::makeSyntheticInputSection(StringRef segName,
+ConcatInputSection *macho::makeSyntheticInputSection(Ctx&ctx,StringRef segName,
                                                      StringRef sectName,
                                                      uint32_t flags,
                                                      ArrayRef<uint8_t> data,
                                                      uint32_t align) {
   Section &section =
-      *make<Section>(/*file=*/nullptr, segName, sectName, flags, /*addr=*/0);
-  auto isec = make<ConcatInputSection>(section, data, align);
+      *ctx.make<Section>(/*file=*/nullptr, segName, sectName, flags, /*addr=*/0);
+  auto isec = ctx.make<ConcatInputSection>(ctx,section, data, align);
   section.subsections.push_back({0, isec});
   return isec;
 }
@@ -245,9 +250,9 @@ void CStringInputSection::splitIntoPieces() {
   while (!s.empty()) {
     size_t end = s.find(0);
     if (end == StringRef::npos)
-      fatal(getLocation(off) + ": string is not null terminated");
+      ctx.fatal(getLocation(off) + ": string is not null terminated");
     uint32_t hash = deduplicateLiterals ? xxh3_64bits(s.take_front(end)) : 0;
-    pieces.emplace_back(off, hash);
+    pieces.emplace_back(ctx,off, hash);
     size_t size = end + 1; // include null terminator
     s = s.substr(size);
     off += size;
@@ -256,7 +261,7 @@ void CStringInputSection::splitIntoPieces() {
 
 StringPiece &CStringInputSection::getStringPiece(uint64_t off) {
   if (off >= data.size())
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.fatal(toString(this) + ": offset is outside the section");
 
   auto it =
       partition_point(pieces, [=](StringPiece p) { return p.inSecOff <= off; });
@@ -269,12 +274,15 @@ const StringPiece &CStringInputSection::getStringPiece(uint64_t off) const {
 
 size_t CStringInputSection::getStringPieceIndex(uint64_t off) const {
   if (off >= data.size())
-    fatal(toString(this) + ": offset is outside the section");
+    ctx.fatal(toString(this) + ": offset is outside the section");
 
   auto it =
       partition_point(pieces, [=](StringPiece p) { return p.inSecOff <= off; });
   return std::distance(pieces.begin(), it) - 1;
 }
+
+StringPiece::StringPiece(Ctx&ctx,uint64_t off, uint32_t hash)
+      : inSecOff(off), live(!ctx.config->deadStrip), hash(hash) {}
 
 uint64_t CStringInputSection::getOffset(uint64_t off) const {
   const StringPiece &piece = getStringPiece(off);
@@ -282,10 +290,10 @@ uint64_t CStringInputSection::getOffset(uint64_t off) const {
   return piece.outSecOff + addend;
 }
 
-WordLiteralInputSection::WordLiteralInputSection(const Section &section,
+WordLiteralInputSection::WordLiteralInputSection(Ctx&ctx,const Section &section,
                                                  ArrayRef<uint8_t> data,
                                                  uint32_t align)
-    : InputSection(WordLiteralKind, section, data, align) {
+    : InputSection(ctx,WordLiteralKind, section, data, align) {
   switch (sectionType(getFlags())) {
   case S_4BYTE_LITERALS:
     power2LiteralSize = 2;
@@ -300,7 +308,7 @@ WordLiteralInputSection::WordLiteralInputSection(const Section &section,
     llvm_unreachable("invalid literal section type");
   }
 
-  live.resize(data.size() >> power2LiteralSize, !config->deadStrip);
+  live.resize(data.size() >> power2LiteralSize, !ctx.config->deadStrip);
 }
 
 uint64_t WordLiteralInputSection::getOffset(uint64_t off) const {

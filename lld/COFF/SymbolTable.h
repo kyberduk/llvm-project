@@ -138,7 +138,7 @@ private:
   COFFLinkerContext &ctx;
 };
 
-std::vector<std::string> getSymbolLocations(ObjFile *file, uint32_t symIndex);
+std::vector<std::string> getSymbolLocations(COFFLinkerContext &ctx,ObjFile *file, uint32_t symIndex);
 
 StringRef ltrim1(StringRef s, const char *chars);
 

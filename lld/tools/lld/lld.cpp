@@ -102,7 +102,7 @@ int lld_main(int argc, char **argv, const llvm::ToolContext &) {
     // Execute one iteration.
     auto r = lldMain(args, llvm::outs(), llvm::errs(), LLD_ALL_DRIVERS);
     if (!r.canRunAgain)
-      exitLld(r.retCode); // Exit now, can't re-execute again.
+      exitLld(nullptr, r.retCode); // Exit now, can't re-execute again.
 
     if (!mainRet) {
       mainRet = r.retCode;

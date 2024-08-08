@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Ctx.h"
 #include "OutputSections.h"
 #include "Relocations.h"
 #include "Symbols.h"
@@ -26,7 +27,7 @@ using namespace lld::elf;
 namespace {
 class X86_64 : public TargetInfo {
 public:
-  X86_64();
+  X86_64(Ctx &ctx);
   int getTlsGdRelaxSkip(RelType type) const override;
   RelExpr getRelExpr(RelType type, const Symbol &s,
                      const uint8_t *loc) const override;
@@ -67,7 +68,7 @@ static const std::vector<std::vector<uint8_t>> nopInstructions = {
     {0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
     {0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}};
 
-X86_64::X86_64() {
+X86_64::X86_64(Ctx &ctx) : TargetInfo(ctx) {
   copyRel = R_X86_64_COPY;
   gotRel = R_X86_64_GLOB_DAT;
   pltRel = R_X86_64_JUMP_SLOT;
@@ -174,14 +175,14 @@ static bool isRelocationForJmpInsn(Relocation &R) {
 // next section.
 // TODO: Delete this once psABI reserves a new relocation type for fall thru
 // jumps.
-static bool isFallThruRelocation(InputSection &is, InputFile *file,
+static bool isFallThruRelocation(Ctx &ctx, InputSection &is, InputFile *file,
                                  InputSection *nextIS, Relocation &r) {
   if (!isRelocationForJmpInsn(r))
     return false;
 
   uint64_t addrLoc = is.getOutputSection()->addr + is.outSecOff + r.offset;
   uint64_t targetOffset = InputSectionBase::getRelocTargetVA(
-      file, r.type, r.addend, addrLoc, *r.sym, r.expr);
+      ctx, file, r.type, r.addend, addrLoc, *r.sym, r.expr);
 
   // If this jmp is a fall thru, the target offset is the beginning of the
   // next section.
@@ -244,12 +245,12 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is, InputFile *file,
   if (nextIS == nullptr)
     return false;
 
-  if (is.getSize() < sizeOfDirectJmpInsn)
+  if (is.getSize(ctx) < sizeOfDirectJmpInsn)
     return false;
 
   // If this jmp insn can be removed, it is the last insn and the
   // relocation is 4 bytes before the end.
-  unsigned rIndex = getRelocationWithOffset(is, is.getSize() - 4);
+  unsigned rIndex = getRelocationWithOffset(is, is.getSize(ctx) - 4);
   if (rIndex == is.relocs().size())
     return false;
 
@@ -261,7 +262,7 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is, InputFile *file,
   if (*(secContents + r.offset - 1) != 0xe9)
     return false;
 
-  if (isFallThruRelocation(is, file, nextIS, r)) {
+  if (isFallThruRelocation(ctx, is, file, nextIS, r)) {
     // This is a fall thru and can be deleted.
     r.expr = R_NONE;
     r.offset = 0;
@@ -273,11 +274,11 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is, InputFile *file,
   // Now, check if flip and delete is possible.
   const unsigned sizeOfJmpCCInsn = 6;
   // To flip, there must be at least one JmpCC and one direct jmp.
-  if (is.getSize() < sizeOfDirectJmpInsn + sizeOfJmpCCInsn)
+  if (is.getSize(ctx) < sizeOfDirectJmpInsn + sizeOfJmpCCInsn)
     return false;
 
   unsigned rbIndex =
-      getRelocationWithOffset(is, (is.getSize() - sizeOfDirectJmpInsn - 4));
+      getRelocationWithOffset(is, (is.getSize(ctx) - sizeOfDirectJmpInsn - 4));
   if (rbIndex == is.relocs().size())
     return false;
 
@@ -288,7 +289,7 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is, InputFile *file,
   if (jmpOpcodeB == J_UNKNOWN)
     return false;
 
-  if (!isFallThruRelocation(is, file, nextIS, rB))
+  if (!isFallThruRelocation(ctx, is, file, nextIS, rB))
     return false;
 
   // jmpCC jumps to the fall thru block, the branch can be flipped and the
@@ -296,7 +297,7 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is, InputFile *file,
   JmpInsnOpcode jInvert = invertJmpOpcode(jmpOpcodeB);
   if (jInvert == J_UNKNOWN)
     return false;
-  is.jumpInstrMod = make<JumpInstrMod>();
+  is.jumpInstrMod = ctx.make<JumpInstrMod>();
   *is.jumpInstrMod = {rB.offset - 1, jInvert, 4};
   // Move R's values to rB except the offset.
   rB = {r.expr, r.type, rB.offset, r.addend, r.sym};
@@ -310,17 +311,18 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is, InputFile *file,
 
 bool X86_64::relaxOnce(int pass) const {
   uint64_t minVA = UINT64_MAX, maxVA = 0;
-  for (OutputSection *osec : outputSections) {
+  for (OutputSection *osec : ctx.outputSections) {
     minVA = std::min(minVA, osec->addr);
     maxVA = std::max(maxVA, osec->addr + osec->size);
   }
-  // If the max VA difference is under 2^31, GOT-generating relocations with a 32-bit range cannot overflow.
+  // If the max VA difference is under 2^31, GOT-generating relocations with a
+  // 32-bit range cannot overflow.
   if (isUInt<31>(maxVA - minVA))
     return false;
 
   SmallVector<InputSection *, 0> storage;
   bool changed = false;
-  for (OutputSection *osec : outputSections) {
+  for (OutputSection *osec : ctx.outputSections) {
     if (!(osec->flags & SHF_EXECINSTR))
       continue;
     for (InputSection *sec : getInputSections(*osec, storage)) {
@@ -328,15 +330,15 @@ bool X86_64::relaxOnce(int pass) const {
         if (rel.expr != R_RELAX_GOT_PC)
           continue;
 
-        uint64_t v = sec->getRelocTargetVA(sec->file, rel.type, rel.addend,
+        uint64_t v = sec->getRelocTargetVA(ctx, sec->file, rel.type, rel.addend,
                                            sec->getOutputSection()->addr +
                                                sec->outSecOff + rel.offset,
                                            *rel.sym, rel.expr);
         if (isInt<32>(v))
           continue;
         if (rel.sym->auxIdx == 0) {
-          rel.sym->allocateAux();
-          addGotEntry(*rel.sym);
+          rel.sym->allocateAux(ctx);
+          addGotEntry(ctx, *rel.sym);
           changed = true;
         }
         rel.expr = R_GOT_PC;
@@ -397,8 +399,8 @@ RelExpr X86_64::getRelExpr(RelType type, const Symbol &s,
   case R_X86_64_NONE:
     return R_NONE;
   default:
-    error(getErrorLocation(loc) + "unknown relocation (" + Twine(type) +
-          ") against symbol " + toString(s));
+    ctx.error(getErrorLocation(ctx, loc) + "unknown relocation (" +
+              Twine(type) + ") against symbol " + toString(ctx, s));
     return R_NONE;
   }
 }
@@ -408,29 +410,30 @@ void X86_64::writeGotPltHeader(uint8_t *buf) const {
   // in the psABI and glibc before Aug 2021 used the entry to compute run-time
   // load address of the shared object (note that this is relevant for linking
   // ld.so, not any other program).
-  write64le(buf, mainPart->dynamic->getVA());
+  write64le(buf, ctx.mainPart->dynamic->getVA(ctx));
 }
 
 void X86_64::writeGotPlt(uint8_t *buf, const Symbol &s) const {
   // See comments in X86::writeGotPlt.
-  write64le(buf, s.getPltVA() + 6);
+  write64le(buf, s.getPltVA(ctx) + 6);
 }
 
 void X86_64::writeIgotPlt(uint8_t *buf, const Symbol &s) const {
   // An x86 entry is the address of the ifunc resolver function (for -z rel).
-  if (config->writeAddends)
-    write64le(buf, s.getVA());
+  if (ctx.config->writeAddends)
+    write64le(buf, s.getVA(ctx));
 }
 
 void X86_64::writePltHeader(uint8_t *buf) const {
   const uint8_t pltData[] = {
-      0xff, 0x35, 0, 0, 0, 0, // pushq GOTPLT+8(%rip)
-      0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+16(%rip)
-      0x0f, 0x1f, 0x40, 0x00, // nop
+      0xff, 0x35, 0,    0,    0, 0, // pushq GOTPLT+8(%rip)
+      0xff, 0x25, 0,    0,    0, 0, // jmp *GOTPLT+16(%rip)
+      0x0f, 0x1f, 0x40, 0x00,       // nop
   };
   memcpy(buf, pltData, sizeof(pltData));
-  uint64_t gotPlt = in.gotPlt->getVA();
-  uint64_t plt = in.ibtPlt ? in.ibtPlt->getVA() : in.plt->getVA();
+  uint64_t gotPlt = ctx.in.gotPlt->getVA(ctx);
+  uint64_t plt =
+      ctx.in.ibtPlt ? ctx.in.ibtPlt->getVA(ctx) : ctx.in.plt->getVA(ctx);
   write32le(buf + 2, gotPlt - plt + 2); // GOTPLT+8
   write32le(buf + 8, gotPlt - plt + 4); // GOTPLT+16
 }
@@ -439,14 +442,14 @@ void X86_64::writePlt(uint8_t *buf, const Symbol &sym,
                       uint64_t pltEntryAddr) const {
   const uint8_t inst[] = {
       0xff, 0x25, 0, 0, 0, 0, // jmpq *got(%rip)
-      0x68, 0, 0, 0, 0,       // pushq <relocation index>
-      0xe9, 0, 0, 0, 0,       // jmpq plt[0]
+      0x68, 0,    0, 0, 0,    // pushq <relocation index>
+      0xe9, 0,    0, 0, 0,    // jmpq plt[0]
   };
   memcpy(buf, inst, sizeof(inst));
 
-  write32le(buf + 2, sym.getGotPltVA() - pltEntryAddr - 6);
-  write32le(buf + 7, sym.getPltIdx());
-  write32le(buf + 12, in.plt->getVA() - pltEntryAddr - 16);
+  write32le(buf + 2, sym.getGotPltVA(ctx) - pltEntryAddr - 6);
+  write32le(buf + 7, sym.getPltIdx(ctx));
+  write32le(buf + 12, ctx.in.plt->getVA(ctx) - pltEntryAddr - 16);
 }
 
 RelType X86_64::getDynRel(RelType type) const {
@@ -456,7 +459,8 @@ RelType X86_64::getDynRel(RelType type) const {
   return R_X86_64_NONE;
 }
 
-static void relaxTlsGdToLe(uint8_t *loc, const Relocation &rel, uint64_t val) {
+static void relaxTlsGdToLe(Ctx &ctx, uint8_t *loc, const Relocation &rel,
+                           uint64_t val) {
   if (rel.type == R_X86_64_TLSGD) {
     // Convert
     //   .byte 0x66
@@ -479,9 +483,9 @@ static void relaxTlsGdToLe(uint8_t *loc, const Relocation &rel, uint64_t val) {
     // Convert leaq x@tlsdesc(%rip), %REG to movq $x@tpoff, %REG.
     if ((loc[-3] & 0xfb) != 0x48 || loc[-2] != 0x8d ||
         (loc[-1] & 0xc7) != 0x05) {
-      errorOrWarn(getErrorLocation(loc - 3) +
-                  "R_X86_64_GOTPC32_TLSDESC must be used "
-                  "in leaq x@tlsdesc(%rip), %REG");
+      errorOrWarn(ctx, getErrorLocation(ctx, loc - 3) +
+                           "R_X86_64_GOTPC32_TLSDESC must be used "
+                           "in leaq x@tlsdesc(%rip), %REG");
       return;
     }
     loc[-3] = 0x48 | ((loc[-3] >> 2) & 1);
@@ -496,7 +500,8 @@ static void relaxTlsGdToLe(uint8_t *loc, const Relocation &rel, uint64_t val) {
   }
 }
 
-static void relaxTlsGdToIe(uint8_t *loc, const Relocation &rel, uint64_t val) {
+static void relaxTlsGdToIe(Ctx &ctx, uint8_t *loc, const Relocation &rel,
+                           uint64_t val) {
   if (rel.type == R_X86_64_TLSGD) {
     // Convert
     //   .byte 0x66
@@ -520,9 +525,9 @@ static void relaxTlsGdToIe(uint8_t *loc, const Relocation &rel, uint64_t val) {
     assert(rel.type == R_X86_64_GOTPC32_TLSDESC);
     if ((loc[-3] & 0xfb) != 0x48 || loc[-2] != 0x8d ||
         (loc[-1] & 0xc7) != 0x05) {
-      errorOrWarn(getErrorLocation(loc - 3) +
-                  "R_X86_64_GOTPC32_TLSDESC must be used "
-                  "in leaq x@tlsdesc(%rip), %REG");
+      errorOrWarn(ctx, getErrorLocation(ctx, loc - 3) +
+                           "R_X86_64_GOTPC32_TLSDESC must be used "
+                           "in leaq x@tlsdesc(%rip), %REG");
       return;
     }
     loc[-2] = 0x8b;
@@ -537,7 +542,8 @@ static void relaxTlsGdToIe(uint8_t *loc, const Relocation &rel, uint64_t val) {
 
 // In some conditions, R_X86_64_GOTTPOFF relocation can be optimized to
 // R_X86_64_TPOFF32 so that it does not use GOT.
-static void relaxTlsIeToLe(uint8_t *loc, const Relocation &, uint64_t val) {
+static void relaxTlsIeToLe(Ctx &ctx, uint8_t *loc, const Relocation &,
+                           uint64_t val) {
   uint8_t *inst = loc - 3;
   uint8_t reg = loc[-1] >> 3;
   uint8_t *regSlot = loc - 1;
@@ -569,8 +575,9 @@ static void relaxTlsIeToLe(uint8_t *loc, const Relocation &, uint64_t val) {
     memcpy(inst, "\x48\xc7", 2);
     *regSlot = 0xc0 | reg;
   } else {
-    error(getErrorLocation(loc - 3) +
-          "R_X86_64_GOTTPOFF must be used in MOVQ or ADDQ instructions only");
+    ctx.error(
+        getErrorLocation(ctx, loc - 3) +
+        "R_X86_64_GOTTPOFF must be used in MOVQ or ADDQ instructions only");
   }
 
   // The original code used a PC relative relocation.
@@ -578,7 +585,8 @@ static void relaxTlsIeToLe(uint8_t *loc, const Relocation &, uint64_t val) {
   write32le(loc, val + 4);
 }
 
-static void relaxTlsLdToLe(uint8_t *loc, const Relocation &rel, uint64_t val) {
+static void relaxTlsLdToLe(Ctx &ctx, uint8_t *loc, const Relocation &rel,
+                           uint64_t val) {
   const uint8_t inst[] = {
       0x66, 0x66,                                           // .word 0x6666
       0x66,                                                 // .byte 0x66
@@ -613,8 +621,9 @@ static void relaxTlsLdToLe(uint8_t *loc, const Relocation &rel, uint64_t val) {
     return;
   }
 
-  error(getErrorLocation(loc - 3) +
-        "expected R_X86_64_PLT32 or R_X86_64_GOTPCRELX after R_X86_64_TLSLD");
+  ctx.error(
+      getErrorLocation(ctx, loc - 3) +
+      "expected R_X86_64_PLT32 or R_X86_64_GOTPCRELX after R_X86_64_TLSLD");
 }
 
 // A JumpInstrMod at a specific offset indicates that the jump instruction
@@ -751,34 +760,36 @@ int64_t X86_64::getImplicitAddend(const uint8_t *buf, RelType type) const {
     // These relocations are defined as not having an implicit addend.
     return 0;
   default:
-    internalLinkerError(getErrorLocation(buf),
-                        "cannot read addend for relocation " + toString(type));
+    internalLinkerError(ctx, getErrorLocation(ctx, buf),
+                        "cannot read addend for relocation " +
+                            toString(ctx, type));
     return 0;
   }
 }
 
-static void relaxGot(uint8_t *loc, const Relocation &rel, uint64_t val);
+static void relaxGot(Ctx &ctx, uint8_t *loc, const Relocation &rel,
+                     uint64_t val);
 
 void X86_64::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   switch (rel.type) {
   case R_X86_64_8:
-    checkIntUInt(loc, val, 8, rel);
+    checkIntUInt(ctx, loc, val, 8, rel);
     *loc = val;
     break;
   case R_X86_64_PC8:
-    checkInt(loc, val, 8, rel);
+    checkInt(ctx, loc, val, 8, rel);
     *loc = val;
     break;
   case R_X86_64_16:
-    checkIntUInt(loc, val, 16, rel);
+    checkIntUInt(ctx, loc, val, 16, rel);
     write16le(loc, val);
     break;
   case R_X86_64_PC16:
-    checkInt(loc, val, 16, rel);
+    checkInt(ctx, loc, val, 16, rel);
     write16le(loc, val);
     break;
   case R_X86_64_32:
-    checkUInt(loc, val, 32, rel);
+    checkUInt(ctx, loc, val, 32, rel);
     write32le(loc, val);
     break;
   case R_X86_64_32S:
@@ -789,7 +800,7 @@ void X86_64::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   case R_X86_64_PLT32:
   case R_X86_64_DTPOFF32:
   case R_X86_64_SIZE32:
-    checkInt(loc, val, 32, rel);
+    checkInt(ctx, loc, val, 32, rel);
     write32le(loc, val);
     break;
   case R_X86_64_64:
@@ -806,9 +817,9 @@ void X86_64::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   case R_X86_64_GOTPCRELX:
   case R_X86_64_REX_GOTPCRELX:
     if (rel.expr != R_GOT_PC) {
-      relaxGot(loc, rel, val);
+      relaxGot(ctx, loc, rel, val);
     } else {
-      checkInt(loc, val, 32, rel);
+      checkInt(ctx, loc, val, 32, rel);
       write32le(loc, val);
     }
     break;
@@ -816,32 +827,32 @@ void X86_64::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   case R_X86_64_TLSDESC_CALL:
   case R_X86_64_TLSGD:
     if (rel.expr == R_RELAX_TLS_GD_TO_LE) {
-      relaxTlsGdToLe(loc, rel, val);
+      relaxTlsGdToLe(ctx, loc, rel, val);
     } else if (rel.expr == R_RELAX_TLS_GD_TO_IE) {
-      relaxTlsGdToIe(loc, rel, val);
+      relaxTlsGdToIe(ctx, loc, rel, val);
     } else {
-      checkInt(loc, val, 32, rel);
+      checkInt(ctx, loc, val, 32, rel);
       write32le(loc, val);
     }
     break;
   case R_X86_64_TLSLD:
     if (rel.expr == R_RELAX_TLS_LD_TO_LE) {
-      relaxTlsLdToLe(loc, rel, val);
+      relaxTlsLdToLe(ctx, loc, rel, val);
     } else {
-      checkInt(loc, val, 32, rel);
+      checkInt(ctx, loc, val, 32, rel);
       write32le(loc, val);
     }
     break;
   case R_X86_64_GOTTPOFF:
     if (rel.expr == R_RELAX_TLS_IE_TO_LE) {
-      relaxTlsIeToLe(loc, rel, val);
+      relaxTlsIeToLe(ctx, loc, rel, val);
     } else {
-      checkInt(loc, val, 32, rel);
+      checkInt(ctx, loc, val, 32, rel);
       write32le(loc, val);
     }
     break;
   case R_X86_64_TPOFF32:
-    checkInt(loc, val, 32, rel);
+    checkInt(ctx, loc, val, 32, rel);
     write32le(loc, val);
     break;
 
@@ -860,7 +871,7 @@ RelExpr X86_64::adjustGotPcExpr(RelType type, int64_t addend,
   // with addend != -4. Such an instruction does not load the full GOT entry, so
   // we cannot relax the relocation. E.g. movl x@GOTPCREL+4(%rip), %rax
   // (addend=0) loads the high 32 bits of the GOT entry.
-  if (!config->relax || addend != -4 ||
+  if (!ctx.config->relax || addend != -4 ||
       (type != R_X86_64_GOTPCRELX && type != R_X86_64_REX_GOTPCRELX))
     return R_GOT_PC;
   const uint8_t op = loc[-2];
@@ -883,7 +894,7 @@ RelExpr X86_64::adjustGotPcExpr(RelType type, int64_t addend,
 
   // Relaxation of test, adc, add, and, cmp, or, sbb, sub, xor.
   // If PIC then no relaxation is available.
-  return config->isPic ? R_GOT_PC : R_RELAX_GOT_PC_NOPIC;
+  return ctx.config->isPic ? R_GOT_PC : R_RELAX_GOT_PC_NOPIC;
 }
 
 // A subset of relaxations can only be applied for no-PIC. This method
@@ -954,7 +965,8 @@ static void relaxGotNoPic(uint8_t *loc, uint64_t val, uint8_t op,
   write32le(loc, val);
 }
 
-static void relaxGot(uint8_t *loc, const Relocation &rel, uint64_t val) {
+static void relaxGot(Ctx &ctx, uint8_t *loc, const Relocation &rel,
+                     uint64_t val) {
   assert(isInt<32>(val) &&
          "GOTPCRELX should not have been relaxed if it overflows");
   const uint8_t op = loc[-2];
@@ -970,7 +982,7 @@ static void relaxGot(uint8_t *loc, const Relocation &rel, uint64_t val) {
   if (op != 0xff) {
     // We are relaxing a rip relative to an absolute, so compensate
     // for the old -4 addend.
-    assert(!config->isPic);
+    assert(!ctx.config->isPic);
     relaxGotNoPic(loc, val + 4, op, modRm);
     return;
   }
@@ -1000,8 +1012,8 @@ static void relaxGot(uint8_t *loc, const Relocation &rel, uint64_t val) {
 // B) Or a load of a stack pointer offset with an lea to r10 or r11.
 bool X86_64::adjustPrologueForCrossSplitStack(uint8_t *loc, uint8_t *end,
                                               uint8_t stOther) const {
-  if (!config->is64) {
-    error("target doesn't support split stacks");
+  if (!ctx.config->is64) {
+    ctx.error("target doesn't support split stacks");
     return false;
   }
 
@@ -1040,7 +1052,7 @@ void X86_64::relocateAlloc(InputSectionBase &sec, uint8_t *buf) const {
       continue;
     uint8_t *loc = buf + rel.offset;
     const uint64_t val =
-        sec.getRelocTargetVA(sec.file, rel.type, rel.addend,
+        sec.getRelocTargetVA(ctx, sec.file, rel.type, rel.addend,
                              secAddr + rel.offset, *rel.sym, rel.expr);
     relocate(loc, rel, val);
   }
@@ -1056,21 +1068,21 @@ void X86_64::relocateAlloc(InputSectionBase &sec, uint8_t *buf) const {
 namespace {
 class IntelIBT : public X86_64 {
 public:
-  IntelIBT();
+  IntelIBT(Ctx &ctx);
   void writeGotPlt(uint8_t *buf, const Symbol &s) const override;
   void writePlt(uint8_t *buf, const Symbol &sym,
                 uint64_t pltEntryAddr) const override;
   void writeIBTPlt(uint8_t *buf, size_t numEntries) const override;
 
-  static const unsigned IBTPltHeaderSize = 16;
+  static constexpr unsigned IBTPltHeaderSize = 16;
 };
 } // namespace
 
-IntelIBT::IntelIBT() { pltHeaderSize = 0; }
+IntelIBT::IntelIBT(Ctx &ctx) : X86_64(ctx) { pltHeaderSize = 0; }
 
 void IntelIBT::writeGotPlt(uint8_t *buf, const Symbol &s) const {
-  uint64_t va =
-      in.ibtPlt->getVA() + IBTPltHeaderSize + s.getPltIdx() * pltEntrySize;
+  uint64_t va = ctx.in.ibtPlt->getVA(ctx) + IBTPltHeaderSize +
+                s.getPltIdx(ctx) * pltEntrySize;
   write64le(buf, va);
 }
 
@@ -1082,7 +1094,7 @@ void IntelIBT::writePlt(uint8_t *buf, const Symbol &sym,
       0x66, 0x0f, 0x1f, 0x44, 0, 0, // nop
   };
   memcpy(buf, Inst, sizeof(Inst));
-  write32le(buf + 6, sym.getGotPltVA() - pltEntryAddr - 10);
+  write32le(buf + 6, sym.getGotPltVA(ctx) - pltEntryAddr - 10);
 }
 
 void IntelIBT::writeIBTPlt(uint8_t *buf, size_t numEntries) const {
@@ -1116,7 +1128,7 @@ void IntelIBT::writeIBTPlt(uint8_t *buf, size_t numEntries) const {
 namespace {
 class Retpoline : public X86_64 {
 public:
-  Retpoline();
+  Retpoline(Ctx &ctx);
   void writeGotPlt(uint8_t *buf, const Symbol &s) const override;
   void writePltHeader(uint8_t *buf) const override;
   void writePlt(uint8_t *buf, const Symbol &sym,
@@ -1125,7 +1137,7 @@ public:
 
 class RetpolineZNow : public X86_64 {
 public:
-  RetpolineZNow();
+  RetpolineZNow(Ctx &ctx);
   void writeGotPlt(uint8_t *buf, const Symbol &s) const override {}
   void writePltHeader(uint8_t *buf) const override;
   void writePlt(uint8_t *buf, const Symbol &sym,
@@ -1133,24 +1145,24 @@ public:
 };
 } // namespace
 
-Retpoline::Retpoline() {
+Retpoline::Retpoline(Ctx &ctx) : X86_64(ctx) {
   pltHeaderSize = 48;
   pltEntrySize = 32;
   ipltEntrySize = 32;
 }
 
 void Retpoline::writeGotPlt(uint8_t *buf, const Symbol &s) const {
-  write64le(buf, s.getPltVA() + 17);
+  write64le(buf, s.getPltVA(ctx) + 17);
 }
 
 void Retpoline::writePltHeader(uint8_t *buf) const {
   const uint8_t insn[] = {
-      0xff, 0x35, 0,    0,    0,    0,          // 0:    pushq GOTPLT+8(%rip)
-      0x4c, 0x8b, 0x1d, 0,    0,    0,    0,    // 6:    mov GOTPLT+16(%rip), %r11
-      0xe8, 0x0e, 0x00, 0x00, 0x00,             // d:    callq next
-      0xf3, 0x90,                               // 12: loop: pause
-      0x0f, 0xae, 0xe8,                         // 14:   lfence
-      0xeb, 0xf9,                               // 17:   jmp loop
+      0xff, 0x35, 0,    0,    0,    0,       // 0:    pushq GOTPLT+8(%rip)
+      0x4c, 0x8b, 0x1d, 0,    0,    0,    0, // 6:    mov GOTPLT+16(%rip), %r11
+      0xe8, 0x0e, 0x00, 0x00, 0x00,          // d:    callq next
+      0xf3, 0x90,                            // 12: loop: pause
+      0x0f, 0xae, 0xe8,                      // 14:   lfence
+      0xeb, 0xf9,                            // 17:   jmp loop
       0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // 19:   int3; .align 16
       0x4c, 0x89, 0x1c, 0x24,                   // 20: next: mov %r11, (%rsp)
       0xc3,                                     // 24:   ret
@@ -1159,8 +1171,8 @@ void Retpoline::writePltHeader(uint8_t *buf) const {
   };
   memcpy(buf, insn, sizeof(insn));
 
-  uint64_t gotPlt = in.gotPlt->getVA();
-  uint64_t plt = in.plt->getVA();
+  uint64_t gotPlt = ctx.in.gotPlt->getVA(ctx);
+  uint64_t plt = ctx.in.plt->getVA(ctx);
   write32le(buf + 2, gotPlt - plt - 6 + 8);
   write32le(buf + 9, gotPlt - plt - 13 + 16);
 }
@@ -1168,25 +1180,25 @@ void Retpoline::writePltHeader(uint8_t *buf) const {
 void Retpoline::writePlt(uint8_t *buf, const Symbol &sym,
                          uint64_t pltEntryAddr) const {
   const uint8_t insn[] = {
-      0x4c, 0x8b, 0x1d, 0, 0, 0, 0, // 0:  mov foo@GOTPLT(%rip), %r11
-      0xe8, 0,    0,    0,    0,    // 7:  callq plt+0x20
-      0xe9, 0,    0,    0,    0,    // c:  jmp plt+0x12
-      0x68, 0,    0,    0,    0,    // 11: pushq <relocation index>
-      0xe9, 0,    0,    0,    0,    // 16: jmp plt+0
-      0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // 1b: int3; padding
+      0x4c, 0x8b, 0x1d, 0,    0,    0, 0, // 0:  mov foo@GOTPLT(%rip), %r11
+      0xe8, 0,    0,    0,    0,          // 7:  callq plt+0x20
+      0xe9, 0,    0,    0,    0,          // c:  jmp plt+0x12
+      0x68, 0,    0,    0,    0,          // 11: pushq <relocation index>
+      0xe9, 0,    0,    0,    0,          // 16: jmp plt+0
+      0xcc, 0xcc, 0xcc, 0xcc, 0xcc,       // 1b: int3; padding
   };
   memcpy(buf, insn, sizeof(insn));
 
-  uint64_t off = pltEntryAddr - in.plt->getVA();
+  uint64_t off = pltEntryAddr - ctx.in.plt->getVA(ctx);
 
-  write32le(buf + 3, sym.getGotPltVA() - pltEntryAddr - 7);
+  write32le(buf + 3, sym.getGotPltVA(ctx) - pltEntryAddr - 7);
   write32le(buf + 8, -off - 12 + 32);
   write32le(buf + 13, -off - 17 + 18);
-  write32le(buf + 18, sym.getPltIdx());
+  write32le(buf + 18, sym.getPltIdx(ctx));
   write32le(buf + 23, -off - 27);
 }
 
-RetpolineZNow::RetpolineZNow() {
+RetpolineZNow::RetpolineZNow(Ctx &ctx) : X86_64(ctx) {
   pltHeaderSize = 32;
   pltEntrySize = 16;
   ipltEntrySize = 16;
@@ -1217,27 +1229,23 @@ void RetpolineZNow::writePlt(uint8_t *buf, const Symbol &sym,
   };
   memcpy(buf, insn, sizeof(insn));
 
-  write32le(buf + 3, sym.getGotPltVA() - pltEntryAddr - 7);
-  write32le(buf + 8, in.plt->getVA() - pltEntryAddr - 12);
+  write32le(buf + 3, sym.getGotPltVA(ctx) - pltEntryAddr - 7);
+  write32le(buf + 8, ctx.in.plt->getVA(ctx) - pltEntryAddr - 12);
 }
 
-static TargetInfo *getTargetInfo() {
-  if (config->zRetpolineplt) {
-    if (config->zNow) {
-      static RetpolineZNow t;
-      return &t;
+static TargetInfo *getTargetInfo(Ctx &ctx) {
+  if (ctx.config->zRetpolineplt) {
+    if (ctx.config->zNow) {
+      return new RetpolineZNow(ctx);
     }
-    static Retpoline t;
-    return &t;
+    return new Retpoline(ctx);
   }
 
-  if (config->andFeatures & GNU_PROPERTY_X86_FEATURE_1_IBT) {
-    static IntelIBT t;
-    return &t;
+  if (ctx.config->andFeatures & GNU_PROPERTY_X86_FEATURE_1_IBT) {
+    return new IntelIBT(ctx);
   }
 
-  static X86_64 t;
-  return &t;
+  return new X86_64(ctx);
 }
 
-TargetInfo *elf::getX86_64TargetInfo() { return getTargetInfo(); }
+TargetInfo *elf::getX86_64TargetInfo(Ctx &ctx) { return getTargetInfo(ctx); }

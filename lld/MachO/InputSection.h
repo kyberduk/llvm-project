@@ -64,15 +64,16 @@ public:
   virtual const InputSection *canonical() const { return this; }
 
 protected:
-  InputSection(Kind kind, const Section &section, ArrayRef<uint8_t> data,
-               uint32_t align)
-      : sectionKind(kind), keepUnique(false), hasAltEntry(false), align(align),
-        data(data), section(section) {}
+  InputSection(Ctx &c, Kind kind, const Section &section,
+               ArrayRef<uint8_t> data, uint32_t align)
+      : ctx(c), sectionKind(kind), keepUnique(false), hasAltEntry(false),
+        align(align), data(data), section(section) {}
 
-  InputSection(const InputSection &rhs)
-      : sectionKind(rhs.sectionKind), keepUnique(false), hasAltEntry(false),
-        align(rhs.align), data(rhs.data), section(rhs.section) {}
-
+  InputSection(Ctx &c, const InputSection &rhs)
+      : ctx(c), sectionKind(rhs.sectionKind), keepUnique(false),
+        hasAltEntry(false), align(rhs.align), data(rhs.data),
+        section(rhs.section) {}
+  Ctx &ctx;
   Kind sectionKind;
 
 public:
@@ -104,9 +105,8 @@ protected:
 // contents merged before output.
 class ConcatInputSection final : public InputSection {
 public:
-  ConcatInputSection(const Section &section, ArrayRef<uint8_t> data,
-                     uint32_t align = 1)
-      : InputSection(ConcatKind, section, data, align) {}
+  ConcatInputSection(Ctx&ctx,const Section &section, ArrayRef<uint8_t> data,
+                     uint32_t align = 1);
 
   uint64_t getOffset(uint64_t off) const override { return outSecOff + off; }
   uint64_t getVA() const { return InputSection::getVA(0); }
@@ -140,7 +140,7 @@ public:
   // while all copies in other translation units are coalesced into the
   // first and not copied to the output.
   bool wasCoalesced = false;
-  bool live = !config->deadStrip;
+  bool live;
   bool hasCallSites = false;
   // This variable has two usages. Initially, it represents the input order.
   // After assignAddresses is called, it represents the offset from the
@@ -149,7 +149,7 @@ public:
 };
 
 // Initialize a fake InputSection that does not belong to any InputFile.
-ConcatInputSection *makeSyntheticInputSection(StringRef segName,
+ConcatInputSection *makeSyntheticInputSection(Ctx&ctx,StringRef segName,
                                               StringRef sectName,
                                               uint32_t flags = 0,
                                               ArrayRef<uint8_t> data = {},
@@ -178,8 +178,7 @@ struct StringPiece {
   // Offset from the start of the containing output section.
   uint64_t outSecOff = 0;
 
-  StringPiece(uint64_t off, uint32_t hash)
-      : inSecOff(off), live(!config->deadStrip), hash(hash) {}
+  StringPiece(Ctx&ctx,uint64_t off, uint32_t hash);
 };
 
 static_assert(sizeof(StringPiece) == 16, "StringPiece is too big!");
@@ -196,9 +195,9 @@ static_assert(sizeof(StringPiece) == 16, "StringPiece is too big!");
 // conservative behavior we can certainly implement that.
 class CStringInputSection final : public InputSection {
 public:
-  CStringInputSection(const Section &section, ArrayRef<uint8_t> data,
+  CStringInputSection(Ctx&ctx,const Section &section, ArrayRef<uint8_t> data,
                       uint32_t align, bool dedupLiterals)
-      : InputSection(CStringLiteralKind, section, data, align),
+      : InputSection(ctx,CStringLiteralKind, section, data, align),
         deduplicateLiterals(dedupLiterals) {}
 
   uint64_t getOffset(uint64_t off) const override;
@@ -245,7 +244,7 @@ private:
 
 class WordLiteralInputSection final : public InputSection {
 public:
-  WordLiteralInputSection(const Section &section, ArrayRef<uint8_t> data,
+  WordLiteralInputSection(Ctx&ctx,const Section &section, ArrayRef<uint8_t> data,
                           uint32_t align);
   uint64_t getOffset(uint64_t off) const override;
   bool isLive(uint64_t off) const override {
@@ -300,8 +299,6 @@ bool isClassRefsSection(const InputSection *);
 bool isSelRefsSection(const InputSection *);
 bool isEhFrameSection(const InputSection *);
 bool isGccExceptTabSection(const InputSection *);
-
-extern std::vector<ConcatInputSection *> inputSections;
 
 namespace section_names {
 

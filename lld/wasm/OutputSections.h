@@ -23,13 +23,13 @@ class OutputSection;
 std::string toString(const wasm::OutputSection &section);
 
 namespace wasm {
-
+class Ctx;
 class OutputSegment;
 
 class OutputSection {
 public:
-  OutputSection(uint32_t type, std::string name = "")
-      : type(type), name(name) {}
+  OutputSection(Ctx&c,uint32_t type, std::string name = "")
+      : ctx(c),type(type), name(name) {}
   virtual ~OutputSection() = default;
 
   StringRef getSectionName() const;
@@ -42,7 +42,7 @@ public:
   virtual void finalizeContents() = 0;
   virtual uint32_t getNumRelocations() const { return 0; }
   virtual void writeRelocations(raw_ostream &os) const {}
-
+Ctx&ctx;
   std::string header;
   uint32_t type;
   uint32_t sectionIndex = UINT32_MAX;
@@ -55,8 +55,8 @@ protected:
 
 class CodeSection : public OutputSection {
 public:
-  explicit CodeSection(ArrayRef<InputFunction *> functions)
-      : OutputSection(llvm::wasm::WASM_SEC_CODE), functions(functions) {}
+  explicit CodeSection(Ctx&ctx,ArrayRef<InputFunction *> functions)
+      : OutputSection(ctx,llvm::wasm::WASM_SEC_CODE), functions(functions) {}
 
   static bool classof(const OutputSection *sec) {
     return sec->type == llvm::wasm::WASM_SEC_CODE;
@@ -78,8 +78,8 @@ protected:
 
 class DataSection : public OutputSection {
 public:
-  explicit DataSection(ArrayRef<OutputSegment *> segments)
-      : OutputSection(llvm::wasm::WASM_SEC_DATA), segments(segments) {}
+  explicit DataSection(Ctx&ctx,ArrayRef<OutputSegment *> segments)
+      : OutputSection(ctx,llvm::wasm::WASM_SEC_DATA), segments(segments) {}
 
   static bool classof(const OutputSection *sec) {
     return sec->type == llvm::wasm::WASM_SEC_DATA;
@@ -108,8 +108,8 @@ protected:
 // separately and are instead synthesized by the linker.
 class CustomSection : public OutputSection {
 public:
-  CustomSection(std::string name, ArrayRef<InputChunk *> inputSections)
-      : OutputSection(llvm::wasm::WASM_SEC_CUSTOM, name),
+  CustomSection(Ctx&ctx,std::string name, ArrayRef<InputChunk *> inputSections)
+      : OutputSection(ctx,llvm::wasm::WASM_SEC_CUSTOM, name),
         inputSections(inputSections) {}
 
   static bool classof(const OutputSection *sec) {

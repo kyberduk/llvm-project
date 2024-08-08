@@ -10,8 +10,8 @@
 #define LLD_WASM_MARKLIVE_H
 
 namespace lld::wasm {
-
-void markLive();
+class Ctx;
+void markLive(Ctx&ctx);
 
 } // namespace lld::wasm
 

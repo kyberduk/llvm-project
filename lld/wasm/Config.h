@@ -110,40 +110,6 @@ struct Configuration {
   llvm::SmallVector<uint8_t, 0> buildIdVector;
 };
 
-// The only instance of Configuration struct.
-extern Configuration *config;
-
-// The Ctx object hold all other (non-configuration) global state.
-struct Ctx {
-  llvm::SmallVector<ObjFile *, 0> objectFiles;
-  llvm::SmallVector<StubFile *, 0> stubFiles;
-  llvm::SmallVector<SharedFile *, 0> sharedFiles;
-  llvm::SmallVector<BitcodeFile *, 0> bitcodeFiles;
-  llvm::SmallVector<InputFunction *, 0> syntheticFunctions;
-  llvm::SmallVector<InputGlobal *, 0> syntheticGlobals;
-  llvm::SmallVector<InputTable *, 0> syntheticTables;
-
-  // True if we are creating position-independent code.
-  bool isPic = false;
-
-  // True if we have an MVP input that uses __indirect_function_table and which
-  // requires it to be allocated to table number 0.
-  bool legacyFunctionTable = false;
-
-  // Will be set to true if bss data segments should be emitted. In most cases
-  // this is not necessary.
-  bool emitBssSegments = false;
-
-  // A tuple of (reference, extractedFile, sym). Used by --why-extract=.
-  llvm::SmallVector<std::tuple<std::string, const InputFile *, const Symbol &>,
-                    0>
-      whyExtractRecords;
-
-  void reset();
-};
-
-extern Ctx ctx;
-
 } // namespace lld::wasm
 
 #endif

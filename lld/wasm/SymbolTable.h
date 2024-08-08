@@ -35,7 +35,7 @@ class InputSegment;
 // add*() functions, which are called by input files as they are parsed.
 // There is one add* function per symbol type.
 class SymbolTable {
-public:
+public:SymbolTable(Ctx&c):ctx(c){}
   ArrayRef<Symbol *> symbols() const { return symVector; }
 
   void wrap(Symbol *sym, Symbol *real, Symbol *wrap);
@@ -114,6 +114,8 @@ private:
   TableSymbol *createDefinedIndirectFunctionTable(StringRef name);
   TableSymbol *createUndefinedIndirectFunctionTable(StringRef name);
 
+  Ctx&ctx;
+
   // Maps symbol names to index into the symVector.  -1 means that symbols
   // is to not yet in the vector but it should have tracing enabled if it is
   // ever added.
@@ -133,8 +135,6 @@ private:
   // For LTO.
   std::unique_ptr<BitcodeCompiler> lto;
 };
-
-extern SymbolTable *symtab;
 
 } // namespace lld::wasm
 

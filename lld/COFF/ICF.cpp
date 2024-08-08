@@ -96,8 +96,8 @@ bool ICF::isEligible(SectionChunk *c) {
   // So are vtables.
   const char *itaniumVtablePrefix =
       ctx.config.machine == I386 ? "__ZTV" : "_ZTV";
-  if (c->sym && (c->sym->getName().starts_with("??_7") ||
-                 c->sym->getName().starts_with(itaniumVtablePrefix)))
+  if (c->sym && (c->sym->getName(ctx).starts_with("??_7") ||
+                 c->sym->getName(ctx).starts_with(itaniumVtablePrefix)))
     return true;
 
   // Anything else not in an address-significance table is eligible.
@@ -305,16 +305,16 @@ void ICF::run() {
         [&](size_t begin, size_t end) { segregate(begin, end, false); });
   } while (repeat);
 
-  log("ICF needed " + Twine(cnt) + " iterations");
+  ctx.log("ICF needed " + Twine(cnt) + " iterations");
 
   // Merge sections in the same classes.
   forEachClass([&](size_t begin, size_t end) {
     if (end - begin == 1)
       return;
 
-    log("Selected " + chunks[begin]->getDebugName());
+    ctx.log("Selected " + chunks[begin]->getDebugName(ctx));
     for (size_t i = begin + 1; i < end; ++i) {
-      log("  Removed " + chunks[i]->getDebugName());
+      ctx.log("  Removed " + chunks[i]->getDebugName(ctx));
       chunks[begin]->replace(chunks[i]);
     }
   });

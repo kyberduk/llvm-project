@@ -8,6 +8,7 @@
 
 #include "MarkLive.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "OutputSegment.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
@@ -51,6 +52,8 @@ public:
   using WorklistEntry =
       std::conditional_t<RecordWhyLive, WhyLiveEntry, InputSection>;
 
+  MarkLiveImpl(Ctx &c) : ctx(c) {}
+
   void enqueue(InputSection *isec, uint64_t off) override {
     enqueue(isec, off, nullptr);
   }
@@ -62,6 +65,8 @@ private:
   void addSym(Symbol *s, const WorklistEntry *prev);
   const InputSection *getInputSection(const WorklistEntry *) const;
   WorklistEntry *makeEntry(InputSection *, const WorklistEntry *prev) const;
+
+  Ctx &ctx;
 
   // We build up a worklist of sections which have been marked as live. We
   // only push into the worklist when we discover an unmarked section, and we
@@ -84,7 +89,7 @@ void MarkLiveImpl<RecordWhyLive>::enqueue(
   }
 }
 
-static void printWhyLive(const Symbol *s, const WhyLiveEntry *prev) {
+static void printWhyLive(Ctx &ctx, const Symbol *s, const WhyLiveEntry *prev) {
   std::string out = toString(*s) + " from " + toString(s->getFile());
   int indent = 2;
   for (const WhyLiveEntry *entry = prev; entry;
@@ -96,7 +101,7 @@ static void printWhyLive(const Symbol *s, const WhyLiveEntry *prev) {
       out += "\n" + std::string(indent, ' ') + toString(*symbols.front()) +
              " from " + toString(symbols.front()->getFile());
   }
-  message(out);
+  ctx.message(out);
 }
 
 template <bool RecordWhyLive>
@@ -107,8 +112,8 @@ void MarkLiveImpl<RecordWhyLive>::addSym(
     return;
   s->used = true;
   if constexpr (RecordWhyLive)
-    if (!config->whyLive.empty() && config->whyLive.match(s->getName()))
-      printWhyLive(s, prev);
+    if (!ctx.config->whyLive.empty() && ctx.config->whyLive.match(s->getName()))
+      printWhyLive(ctx,s, prev);
   if (auto *d = dyn_cast<Defined>(s)) {
     if (d->isec)
       enqueue(d->isec, d->value, prev);
@@ -136,7 +141,7 @@ MarkLiveImpl<RecordWhyLive>::makeEntry(
       assert(!prev);
       return nullptr;
     }
-    return make<WhyLiveEntry>(isec, prev);
+    return ctx.make<WhyLiveEntry>(isec, prev);
   } else {
     return isec;
   }
@@ -168,7 +173,7 @@ void MarkLiveImpl<RecordWhyLive>::markTransitively() {
 
     // S_ATTR_LIVE_SUPPORT sections are live if they point _to_ a live
     // section. Process them in a second pass.
-    for (ConcatInputSection *isec : inputSections) {
+    for (ConcatInputSection *isec : ctx.inputSections) {
       // FIXME: Check if copying all S_ATTR_LIVE_SUPPORT sections into a
       // separate vector and only walking that here is faster.
       if (!(isec->getFlags() & S_ATTR_LIVE_SUPPORT) || isec->live)
@@ -200,21 +205,21 @@ void MarkLiveImpl<RecordWhyLive>::markTransitively() {
 // Set live bit on for each reachable chunk. Unmarked (unreachable)
 // InputSections will be ignored by Writer, so they will be excluded
 // from the final output.
-void markLive() {
+void markLive(Ctx&ctx) {
   TimeTraceScope timeScope("markLive");
   MarkLive *marker;
-  if (config->whyLive.empty())
-    marker = make<MarkLiveImpl<false>>();
+  if (ctx.config->whyLive.empty())
+    marker = ctx.make<MarkLiveImpl<false>>(ctx);
   else
-    marker = make<MarkLiveImpl<true>>();
+    marker = ctx.make<MarkLiveImpl<true>>(ctx);
   // Add GC roots.
-  if (config->entry)
-    marker->addSym(config->entry);
-  for (Symbol *sym : symtab->getSymbols()) {
+  if (ctx.config->entry)
+    marker->addSym(ctx.config->entry);
+  for (Symbol *sym : ctx.symtab->getSymbols()) {
     if (auto *defined = dyn_cast<Defined>(sym)) {
       // -exported_symbol(s_list)
-      if (!config->exportedSymbols.empty() &&
-          config->exportedSymbols.match(defined->getName())) {
+      if (!ctx.config->exportedSymbols.empty() &&
+          ctx.config->exportedSymbols.match(defined->getName())) {
         // NOTE: Even though exporting private externs is an ill-defined
         // operation, we are purposely not checking for privateExtern in
         // order to follow ld64's behavior of treating all exported private
@@ -238,7 +243,7 @@ void markLive() {
       // In dylibs and bundles and in executables with -export_dynamic,
       // all external functions are GC roots.
       bool externsAreRoots =
-          config->outputType != MH_EXECUTE || config->exportDynamic;
+          ctx.config->outputType != MH_EXECUTE || ctx.config->exportDynamic;
       if (externsAreRoots && !defined->privateExtern) {
         marker->addSym(defined);
         continue;
@@ -246,19 +251,19 @@ void markLive() {
     }
   }
   // -u symbols
-  for (Symbol *sym : config->explicitUndefineds)
+  for (Symbol *sym : ctx.config->explicitUndefineds)
     marker->addSym(sym);
   // local symbols explicitly marked .no_dead_strip
-  for (const InputFile *file : inputFiles)
+  for (const InputFile *file : ctx.inputFiles)
     if (auto *objFile = dyn_cast<ObjFile>(file))
       for (Symbol *sym : objFile->symbols)
         if (auto *defined = dyn_cast_or_null<Defined>(sym))
           if (!defined->isExternal() && defined->noDeadStrip)
             marker->addSym(defined);
   if (auto *stubBinder =
-          dyn_cast_or_null<DylibSymbol>(symtab->find("dyld_stub_binder")))
+          dyn_cast_or_null<DylibSymbol>(ctx.symtab->find("dyld_stub_binder")))
     marker->addSym(stubBinder);
-  for (ConcatInputSection *isec : inputSections) {
+  for (ConcatInputSection *isec : ctx.inputSections) {
     // Sections marked no_dead_strip
     if (isec->getFlags() & S_ATTR_NO_DEAD_STRIP) {
       marker->enqueue(isec, 0);
@@ -268,14 +273,14 @@ void markLive() {
     // mod_init_funcs, mod_term_funcs sections
     if (sectionType(isec->getFlags()) == S_MOD_INIT_FUNC_POINTERS ||
         sectionType(isec->getFlags()) == S_MOD_TERM_FUNC_POINTERS) {
-      assert(!config->emitInitOffsets ||
+      assert(!ctx.config->emitInitOffsets ||
              sectionType(isec->getFlags()) != S_MOD_INIT_FUNC_POINTERS);
       marker->enqueue(isec, 0);
       continue;
     }
   }
 
-  for (ConcatInputSection *isec : in.initOffsets->inputs())
+  for (ConcatInputSection *isec : ctx.in.initOffsets->inputs())
     marker->enqueue(isec, 0);
 
   marker->markTransitively();

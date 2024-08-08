@@ -54,8 +54,8 @@ namespace lld::macho {
 
 class EhReader {
 public:
-  EhReader(const ObjFile *file, ArrayRef<uint8_t> data, size_t dataOff)
-      : file(file), data(data), dataOff(dataOff) {}
+  EhReader(Ctx &c, const ObjFile *file, ArrayRef<uint8_t> data, size_t dataOff)
+      : ctx(c), file(file), data(data), dataOff(dataOff) {}
   size_t size() const { return data.size(); }
   // Read and validate the length field.
   uint64_t readLength(size_t *off) const;
@@ -69,6 +69,7 @@ public:
   void failOn(size_t errOff, const Twine &msg) const;
 
 private:
+  Ctx &ctx;
   const ObjFile *file;
   ArrayRef<uint8_t> data;
   // The offset of the data array within its section. Used only for error
@@ -90,7 +91,7 @@ private:
 // subtractor relocations.
 class EhRelocator {
 public:
-  EhRelocator(InputSection *isec) : isec(isec) {}
+  EhRelocator(Ctx &c, InputSection *isec) : ctx(c), isec(isec) {}
 
   // For the next two methods, let `PC` denote `isec address + off`.
   // Create relocs writing the value of target - PC to PC.
@@ -105,6 +106,7 @@ public:
   void commit();
 
 private:
+  Ctx &ctx;
   InputSection *isec;
   // Insert new relocs here so that we don't invalidate iterators into the
   // existing relocs vector.

@@ -19,7 +19,7 @@
 
 namespace lld::macho {
 LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
-
+class Ctx;
 class Symbol;
 class InputSection;
 
@@ -71,14 +71,14 @@ struct Reloc {
   InputSection *getReferentInputSection() const;
 };
 
-bool validateSymbolRelocation(const Symbol *, const InputSection *,
+bool validateSymbolRelocation(Ctx&ctx,const Symbol *, const InputSection *,
                               const Reloc &);
 
 /*
  * v: The value the relocation is attempting to encode
  * bits: The number of bits actually available to encode this relocation
  */
-void reportRangeError(void *loc, const Reloc &, const llvm::Twine &v,
+void reportRangeError(Ctx&ctx,void *loc, const Reloc &, const llvm::Twine &v,
                       uint8_t bits, int64_t min, uint64_t max);
 
 struct SymbolDiagnostic {
@@ -86,20 +86,20 @@ struct SymbolDiagnostic {
   llvm::StringRef reason;
 };
 
-void reportRangeError(void *loc, SymbolDiagnostic, const llvm::Twine &v,
+void reportRangeError(Ctx&ctx,void *loc, SymbolDiagnostic, const llvm::Twine &v,
                       uint8_t bits, int64_t min, uint64_t max);
 
 template <typename Diagnostic>
-inline void checkInt(void *loc, Diagnostic d, int64_t v, int bits) {
+inline void checkInt(Ctx&ctx,void *loc, Diagnostic d, int64_t v, int bits) {
   if (v != llvm::SignExtend64(v, bits))
-    reportRangeError(loc, d, llvm::Twine(v), bits, llvm::minIntN(bits),
+    reportRangeError(ctx,loc, d, llvm::Twine(v), bits, llvm::minIntN(bits),
                      llvm::maxIntN(bits));
 }
 
 template <typename Diagnostic>
-inline void checkUInt(void *loc, Diagnostic d, uint64_t v, int bits) {
+inline void checkUInt(Ctx&ctx,void *loc, Diagnostic d, uint64_t v, int bits) {
   if ((v >> bits) != 0)
-    reportRangeError(loc, d, llvm::Twine(v), bits, 0, llvm::maxUIntN(bits));
+    reportRangeError(ctx,loc, d, llvm::Twine(v), bits, 0, llvm::maxUIntN(bits));
 }
 
 inline void writeAddress(uint8_t *loc, uint64_t addr, uint8_t length) {
@@ -115,9 +115,7 @@ inline void writeAddress(uint8_t *loc, uint64_t addr, uint8_t length) {
   }
 }
 
-InputSection *offsetToInputSection(uint64_t *);
-
-extern const RelocAttrs invalidRelocAttrs;
+InputSection *offsetToInputSection(Ctx&ctx,uint64_t *);
 
 } // namespace lld::Macho
 

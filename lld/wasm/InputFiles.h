@@ -26,7 +26,7 @@ class TarWriter;
 
 namespace lld {
 namespace wasm {
-
+class Ctx;
 class InputChunk;
 class InputFunction;
 class InputSegment;
@@ -34,10 +34,6 @@ class InputGlobal;
 class InputTag;
 class InputTable;
 class InputSection;
-
-// If --reproduce option is given, all input files are written
-// to this tar archive.
-extern std::unique_ptr<llvm::TarWriter> tar;
 
 class InputFile {
 public:
@@ -67,13 +63,14 @@ public:
   void markLive() { live = true; }
   bool isLive() const { return live; }
 
+  Ctx&ctx;
+
   // True if this is a relocatable object file/bitcode file in an ar archive
   // or between --start-lib and --end-lib.
   bool lazy = false;
 
 protected:
-  InputFile(Kind k, MemoryBufferRef m)
-      : mb(m), fileKind(k), live(!config->gcSections) {}
+  InputFile(Ctx&ctx,Kind k, MemoryBufferRef m);
 
   void checkArch(llvm::Triple::ArchType arch) const;
 
@@ -90,7 +87,7 @@ private:
 // .o file (wasm object file)
 class ObjFile : public InputFile {
 public:
-  ObjFile(MemoryBufferRef m, StringRef archiveName, bool lazy = false);
+  ObjFile(Ctx&ctx,MemoryBufferRef m, StringRef archiveName, bool lazy = false);
   static bool classof(const InputFile *f) { return f->kind() == ObjectKind; }
 
   void parse(bool ignoreComdats = false);
@@ -146,30 +143,26 @@ private:
 // .so file.
 class SharedFile : public InputFile {
 public:
-  explicit SharedFile(MemoryBufferRef m) : InputFile(SharedKind, m) {}
+  explicit SharedFile(Ctx&ctx,MemoryBufferRef m) : InputFile(ctx,SharedKind, m) {}
   static bool classof(const InputFile *f) { return f->kind() == SharedKind; }
 };
 
 // .bc file
 class BitcodeFile : public InputFile {
 public:
-  BitcodeFile(MemoryBufferRef m, StringRef archiveName,
+  BitcodeFile(Ctx&ctx,MemoryBufferRef m, StringRef archiveName,
               uint64_t offsetInArchive, bool lazy);
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
 
   void parse(StringRef symName);
   void parseLazy();
   std::unique_ptr<llvm::lto::InputFile> obj;
-
-  // Set to true once LTO is complete in order prevent further bitcode objects
-  // being added.
-  static bool doneLTO;
 };
 
 // Stub library (See docs/WebAssembly.rst)
 class StubFile : public InputFile {
 public:
-  explicit StubFile(MemoryBufferRef m) : InputFile(StubKind, m) {}
+  explicit StubFile(Ctx&ctx,MemoryBufferRef m) : InputFile(ctx,StubKind, m) {}
 
   static bool classof(const InputFile *f) { return f->kind() == StubKind; }
 
@@ -180,11 +173,11 @@ public:
 
 // Will report a fatal() error if the input buffer is not a valid bitcode
 // or wasm object file.
-InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName = "",
+InputFile *createObjectFile(Ctx&ctx,MemoryBufferRef mb, StringRef archiveName = "",
                             uint64_t offsetInArchive = 0, bool lazy = false);
 
 // Opens a given file.
-std::optional<MemoryBufferRef> readFile(StringRef path);
+std::optional<MemoryBufferRef> readFile(Ctx&ctx,StringRef path);
 
 } // namespace wasm
 

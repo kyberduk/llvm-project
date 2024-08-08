@@ -9,6 +9,7 @@
 #include "LTO.h"
 #include "Config.h"
 #include "Driver.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "Target.h"
@@ -33,81 +34,81 @@ using namespace llvm;
 using namespace llvm::MachO;
 using namespace llvm::sys;
 
-static std::string getThinLTOOutputFile(StringRef modulePath) {
-  return lto::getThinLTOOutputFile(modulePath, config->thinLTOPrefixReplaceOld,
-                                   config->thinLTOPrefixReplaceNew);
+static std::string getThinLTOOutputFile(Ctx&ctx,StringRef modulePath) {
+  return lto::getThinLTOOutputFile(modulePath, ctx.config->thinLTOPrefixReplaceOld,
+                                   ctx.config->thinLTOPrefixReplaceNew);
 }
 
-static lto::Config createConfig() {
+static lto::Config createConfig(Ctx&ctx) {
   lto::Config c;
   c.Options = initTargetOptionsFromCodeGenFlags();
-  c.Options.EmitAddrsig = config->icfLevel == ICFLevel::safe;
-  for (StringRef C : config->mllvmOpts)
+  c.Options.EmitAddrsig = ctx.config->icfLevel == ICFLevel::safe;
+  for (StringRef C : ctx.config->mllvmOpts)
     c.MllvmArgs.emplace_back(C.str());
   c.CodeModel = getCodeModelFromCMModel();
   c.CPU = getCPUStr();
   c.MAttrs = getMAttrs();
-  c.DiagHandler = diagnosticHandler;
+  c.DiagHandler = [&ctx=ctx](const DiagnosticInfo &di){diagnosticHandler(ctx, di);};
   c.PreCodeGenPassesHook = [](legacy::PassManager &pm) {
     pm.add(createObjCARCContractPass());
   };
 
-  c.AlwaysEmitRegularLTOObj = !config->ltoObjPath.empty();
+  c.AlwaysEmitRegularLTOObj = !ctx.config->ltoObjPath.empty();
 
-  c.TimeTraceEnabled = config->timeTraceEnabled;
-  c.TimeTraceGranularity = config->timeTraceGranularity;
-  c.DebugPassManager = config->ltoDebugPassManager;
-  c.CSIRProfile = std::string(config->csProfilePath);
-  c.RunCSIRInstr = config->csProfileGenerate;
-  c.PGOWarnMismatch = config->pgoWarnMismatch;
-  c.OptLevel = config->ltoo;
-  c.CGOptLevel = config->ltoCgo;
-  if (config->saveTemps)
-    checkError(c.addSaveTemps(config->outputFile.str() + ".",
+  c.TimeTraceEnabled = ctx.config->timeTraceEnabled;
+  c.TimeTraceGranularity = ctx.config->timeTraceGranularity;
+  c.DebugPassManager = ctx.config->ltoDebugPassManager;
+  c.CSIRProfile = std::string(ctx.config->csProfilePath);
+  c.RunCSIRInstr = ctx.config->csProfileGenerate;
+  c.PGOWarnMismatch = ctx.config->pgoWarnMismatch;
+  c.OptLevel = ctx.config->ltoo;
+  c.CGOptLevel = ctx.config->ltoCgo;
+  if (ctx.config->saveTemps)
+    checkError(ctx,c.addSaveTemps(ctx.config->outputFile.str() + ".",
                               /*UseInputModulePath=*/true));
   return c;
 }
 
 // If `originalPath` exists, hardlinks `path` to `originalPath`. If that fails,
 // or `originalPath` is not set, saves `buffer` to `path`.
-static void saveOrHardlinkBuffer(StringRef buffer, const Twine &path,
+static void saveOrHardlinkBuffer(Ctx&ctx,StringRef buffer, const Twine &path,
                                  std::optional<StringRef> originalPath) {
   if (originalPath) {
     auto err = fs::create_hard_link(*originalPath, path);
     if (!err)
       return;
   }
-  saveBuffer(buffer, path);
+  saveBuffer(ctx,buffer, path);
 }
 
-BitcodeCompiler::BitcodeCompiler() {
+BitcodeCompiler::BitcodeCompiler(Ctx&c):ctx(c) {
   // Initialize indexFile.
-  if (!config->thinLTOIndexOnlyArg.empty())
-    indexFile = openFile(config->thinLTOIndexOnlyArg);
+  if (!ctx.config->thinLTOIndexOnlyArg.empty())
+    indexFile = openFile(ctx,ctx.config->thinLTOIndexOnlyArg);
 
   // Initialize ltoObj.
   lto::ThinBackend backend;
   auto onIndexWrite = [&](StringRef S) { thinIndices.erase(S); };
-  if (config->thinLTOIndexOnly) {
+  if (ctx.config->thinLTOIndexOnly) {
     backend = lto::createWriteIndexesThinBackend(
-        std::string(config->thinLTOPrefixReplaceOld),
-        std::string(config->thinLTOPrefixReplaceNew),
-        std::string(config->thinLTOPrefixReplaceNativeObject),
-        config->thinLTOEmitImportsFiles, indexFile.get(), onIndexWrite);
+        std::string(ctx.config->thinLTOPrefixReplaceOld),
+        std::string(ctx.config->thinLTOPrefixReplaceNew),
+        std::string(ctx.config->thinLTOPrefixReplaceNativeObject),
+        ctx.config->thinLTOEmitImportsFiles, indexFile.get(), onIndexWrite);
   } else {
     backend = lto::createInProcessThinBackend(
-        llvm::heavyweight_hardware_concurrency(config->thinLTOJobs),
-        onIndexWrite, config->thinLTOEmitIndexFiles,
-        config->thinLTOEmitImportsFiles);
+        llvm::heavyweight_hardware_concurrency(ctx.config->thinLTOJobs),
+        onIndexWrite, ctx.config->thinLTOEmitIndexFiles,
+        ctx.config->thinLTOEmitImportsFiles);
   }
 
-  ltoObj = std::make_unique<lto::LTO>(createConfig(), backend);
+  ltoObj = std::make_unique<lto::LTO>(createConfig(ctx), backend);
 }
 
 void BitcodeCompiler::add(BitcodeFile &f) {
   lto::InputFile &obj = *f.obj;
 
-  if (config->thinLTOEmitIndexFiles)
+  if (ctx.config->thinLTOEmitIndexFiles)
     thinIndices.insert(obj.getName());
 
   ArrayRef<lto::InputFile::Symbol> objSyms = obj.symbols();
@@ -116,7 +117,7 @@ void BitcodeCompiler::add(BitcodeFile &f) {
 
   // Provide a resolution to the LTO API for each symbol.
   bool exportDynamic =
-      config->outputType != MH_EXECUTE || config->exportDynamic;
+      ctx.config->outputType != MH_EXECUTE || ctx.config->exportDynamic;
   auto symIt = f.symbols.begin();
   for (const lto::InputFile::Symbol &objSym : objSyms) {
     resols.emplace_back();
@@ -146,42 +147,42 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     // Un-define the symbol so that we don't get duplicate symbol errors when we
     // load the ObjFile emitted by LTO compilation.
     if (r.Prevailing)
-      replaceSymbol<Undefined>(sym, sym->getName(), sym->getFile(),
+      replaceSymbol<Undefined>(sym,ctx, sym->getName(), sym->getFile(),
                                RefState::Strong, /*wasBitcodeSymbol=*/true);
 
     // TODO: set the other resolution configs properly
   }
-  checkError(ltoObj->add(std::move(f.obj), resols));
+  checkError(ctx,ltoObj->add(std::move(f.obj), resols));
   hasFiles = true;
 }
 
 // If LazyObjFile has not been added to link, emit empty index files.
 // This is needed because this is what GNU gold plugin does and we have a
 // distributed build system that depends on that behavior.
-static void thinLTOCreateEmptyIndexFiles() {
+static void thinLTOCreateEmptyIndexFiles(Ctx&ctx) {
   DenseSet<StringRef> linkedBitCodeFiles;
-  for (InputFile *file : inputFiles)
+  for (InputFile *file : ctx.inputFiles)
     if (auto *f = dyn_cast<BitcodeFile>(file))
       if (!f->lazy)
         linkedBitCodeFiles.insert(f->getName());
 
-  for (InputFile *file : inputFiles) {
+  for (InputFile *file : ctx.inputFiles) {
     if (auto *f = dyn_cast<BitcodeFile>(file)) {
       if (!f->lazy)
         continue;
       if (linkedBitCodeFiles.contains(f->getName()))
         continue;
       std::string path =
-          replaceThinLTOSuffix(getThinLTOOutputFile(f->obj->getName()));
-      std::unique_ptr<raw_fd_ostream> os = openFile(path + ".thinlto.bc");
+          replaceThinLTOSuffix(ctx,getThinLTOOutputFile(ctx,f->obj->getName()));
+      std::unique_ptr<raw_fd_ostream> os = openFile(ctx,path + ".thinlto.bc");
       if (!os)
         continue;
 
       ModuleSummaryIndex m(/*HaveGVs=*/false);
       m.setSkipModuleByDistributedBackend();
       writeIndexToFile(m, *os);
-      if (config->thinLTOEmitImportsFiles)
-        openFile(path + ".imports");
+      if (ctx.config->thinLTOEmitImportsFiles)
+        openFile(ctx,path + ".imports");
     }
   }
 }
@@ -197,15 +198,15 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
   // to cache native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
-  if (!config->thinLTOCacheDir.empty())
-    cache = check(localCache("ThinLTO", "Thin", config->thinLTOCacheDir,
+  if (!ctx.config->thinLTOCacheDir.empty())
+    cache = check(ctx,localCache("ThinLTO", "Thin", ctx.config->thinLTOCacheDir,
                              [&](size_t task, const Twine &moduleName,
                                  std::unique_ptr<MemoryBuffer> mb) {
                                files[task] = std::move(mb);
                              }));
 
   if (hasFiles)
-    checkError(ltoObj->run(
+    checkError(ctx,ltoObj->run(
         [&](size_t task, const Twine &moduleName) {
           return std::make_unique<CachedFileStream>(
               std::make_unique<raw_svector_ostream>(buf[task]));
@@ -214,39 +215,39 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
 
   // Emit empty index files for non-indexed files
   for (StringRef s : thinIndices) {
-    std::string path = getThinLTOOutputFile(s);
-    openFile(path + ".thinlto.bc");
-    if (config->thinLTOEmitImportsFiles)
-      openFile(path + ".imports");
+    std::string path = getThinLTOOutputFile(ctx,s);
+    openFile(ctx,path + ".thinlto.bc");
+    if (ctx.config->thinLTOEmitImportsFiles)
+      openFile(ctx,path + ".imports");
   }
 
-  if (config->thinLTOEmitIndexFiles)
-    thinLTOCreateEmptyIndexFiles();
+  if (ctx.config->thinLTOEmitIndexFiles)
+    thinLTOCreateEmptyIndexFiles(ctx);
 
   // In ThinLTO mode, Clang passes a temporary directory in -object_path_lto,
   // while the argument is a single file in FullLTO mode.
   bool objPathIsDir = true;
-  if (!config->ltoObjPath.empty()) {
-    if (std::error_code ec = fs::create_directories(config->ltoObjPath))
-      fatal("cannot create LTO object path " + config->ltoObjPath + ": " +
+  if (!ctx.config->ltoObjPath.empty()) {
+    if (std::error_code ec = fs::create_directories(ctx.config->ltoObjPath))
+      ctx.fatal("cannot create LTO object path " + ctx.config->ltoObjPath + ": " +
             ec.message());
 
-    if (!fs::is_directory(config->ltoObjPath)) {
+    if (!fs::is_directory(ctx.config->ltoObjPath)) {
       objPathIsDir = false;
       unsigned objCount =
           count_if(buf, [](const SmallString<0> &b) { return !b.empty(); });
       if (objCount > 1)
-        fatal("-object_path_lto must specify a directory when using ThinLTO");
+        ctx.fatal("-object_path_lto must specify a directory when using ThinLTO");
     }
   }
 
-  auto outputFilePath = [objPathIsDir](int i) {
+  auto outputFilePath = [&ctx=ctx,objPathIsDir](int i) {
     SmallString<261> filePath("/tmp/lto.tmp");
-    if (!config->ltoObjPath.empty()) {
-      filePath = config->ltoObjPath;
+    if (!ctx.config->ltoObjPath.empty()) {
+      filePath = ctx.config->ltoObjPath;
       if (objPathIsDir)
         path::append(filePath, Twine(i) + "." +
-                                   getArchitectureName(config->arch()) +
+                                   getArchitectureName(ctx.config->arch()) +
                                    ".lto.o");
     }
     return filePath;
@@ -255,16 +256,16 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
   // ThinLTO with index only option is required to generate only the index
   // files. After that, we exit from linker and ThinLTO backend runs in a
   // distributed environment.
-  if (config->thinLTOIndexOnly) {
-    if (!config->ltoObjPath.empty())
-      saveBuffer(buf[0], outputFilePath(0));
+  if (ctx.config->thinLTOIndexOnly) {
+    if (!ctx.config->ltoObjPath.empty())
+      saveBuffer(ctx,buf[0], outputFilePath(0));
     if (indexFile)
       indexFile->close();
     return {};
   }
 
-  if (!config->thinLTOCacheDir.empty())
-    pruneCache(config->thinLTOCacheDir, config->thinLTOCachePolicy, files);
+  if (!ctx.config->thinLTOCacheDir.empty())
+    pruneCache(ctx.config->thinLTOCacheDir, ctx.config->thinLTOCachePolicy, files);
 
   std::vector<ObjFile *> ret;
   for (unsigned i = 0; i < maxTasks; ++i) {
@@ -283,18 +284,18 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
       continue;
 
     // FIXME: should `saveTemps` and `ltoObjPath` use the same file name?
-    if (config->saveTemps)
-      saveBuffer(objBuf,
-                 config->outputFile + ((i == 0) ? "" : Twine(i)) + ".lto.o");
+    if (ctx.config->saveTemps)
+      saveBuffer(ctx,objBuf,
+                 ctx.config->outputFile + ((i == 0) ? "" : Twine(i)) + ".lto.o");
 
     auto filePath = outputFilePath(i);
     uint32_t modTime = 0;
-    if (!config->ltoObjPath.empty()) {
-      saveOrHardlinkBuffer(objBuf, filePath, cachePath);
-      modTime = getModTime(filePath);
+    if (!ctx.config->ltoObjPath.empty()) {
+      saveOrHardlinkBuffer(ctx,objBuf, filePath, cachePath);
+      modTime = getModTime(ctx,filePath);
     }
-    ret.push_back(make<ObjFile>(
-        MemoryBufferRef(objBuf, saver().save(filePath.str())), modTime,
+    ret.push_back(ctx.make<ObjFile>(ctx,
+        MemoryBufferRef(objBuf, ctx.saver.save(filePath.str())), modTime,
         /*archiveName=*/"", /*lazy=*/false,
         /*forceHidden=*/false, /*compatArch=*/true, /*builtFromBitcode=*/true));
   }

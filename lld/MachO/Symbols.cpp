@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Symbols.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "SyntheticSections.h"
 #include "llvm/Demangle/Demangle.h"
@@ -15,13 +16,13 @@ using namespace llvm;
 using namespace lld;
 using namespace lld::macho;
 
-static_assert(sizeof(void *) != 8 || sizeof(Symbol) == 56,
+static_assert(sizeof(void *) != 8 || sizeof(Symbol) == 64,
               "Try to minimize Symbol's size; we create many instances");
 
 // The Microsoft ABI doesn't support using parent class tail padding for child
 // members, hence the _MSC_VER check.
 #if !defined(_MSC_VER)
-static_assert(sizeof(void *) != 8 || sizeof(Defined) == 88,
+static_assert(sizeof(void *) != 8 || sizeof(Defined) == 96,
               "Try to minimize Defined's size; we create many instances");
 #endif
 
@@ -29,8 +30,8 @@ static_assert(sizeof(SymbolUnion) == sizeof(Defined),
               "Defined should be the largest Symbol kind");
 
 // Returns a symbol name for an error message.
-static std::string maybeDemangleSymbol(StringRef symName) {
-  if (config->demangle) {
+static std::string maybeDemangleSymbol(Ctx &ctx, StringRef symName) {
+  if (ctx.config->demangle) {
     symName.consume_front("_");
     return demangle(symName);
   }
@@ -38,27 +39,34 @@ static std::string maybeDemangleSymbol(StringRef symName) {
 }
 
 std::string lld::toString(const Symbol &sym) {
-  return maybeDemangleSymbol(sym.getName());
+  return maybeDemangleSymbol(sym.ctx, sym.getName());
 }
 
-std::string lld::toMachOString(const object::Archive::Symbol &b) {
-  return maybeDemangleSymbol(b.getName());
+std::string lld::toMachOString(Ctx&ctx,const object::Archive::Symbol &b) {
+  return maybeDemangleSymbol(ctx,b.getName());
 }
 
-uint64_t Symbol::getStubVA() const { return in.stubs->getVA(stubsIndex); }
+uint64_t Symbol::getStubVA() const { return ctx.in.stubs->getVA(stubsIndex); }
 uint64_t Symbol::getLazyPtrVA() const {
-  return in.lazyPointers->getVA(stubsIndex);
+  return ctx.in.lazyPointers->getVA(stubsIndex);
 }
-uint64_t Symbol::getGotVA() const { return in.got->getVA(gotIndex); }
-uint64_t Symbol::getTlvVA() const { return in.tlvPointers->getVA(gotIndex); }
+uint64_t Symbol::getGotVA() const { return ctx.in.got->getVA(gotIndex); }
+uint64_t Symbol::getTlvVA() const {
+  return ctx.in.tlvPointers->getVA(gotIndex);
+}
 
-Defined::Defined(StringRefZ name, InputFile *file, InputSection *isec,
+Symbol::Symbol(Ctx &c, Kind k, StringRefZ name, InputFile *file)
+    : ctx(c), symbolKind(k), nameData(name.data), file(file),
+      nameSize(name.size), isUsedInRegularObj(!file || isa<ObjFile>(file)),
+      used(!ctx.config->deadStrip) {}
+
+Defined::Defined(Ctx&ctx,StringRefZ name, InputFile *file, InputSection *isec,
                  uint64_t value, uint64_t size, bool isWeakDef, bool isExternal,
                  bool isPrivateExtern, bool includeInSymtab,
                  bool isReferencedDynamically, bool noDeadStrip,
                  bool canOverrideWeakDef, bool isWeakDefCanBeHidden,
                  bool interposable)
-    : Symbol(DefinedKind, name, file), overridesWeakDef(canOverrideWeakDef),
+    : Symbol(ctx,DefinedKind, name, file), overridesWeakDef(canOverrideWeakDef),
       privateExtern(isPrivateExtern), includeInSymtab(includeInSymtab),
       wasIdenticalCodeFolded(false),
       referencedDynamically(isReferencedDynamically), noDeadStrip(noDeadStrip),
@@ -94,7 +102,7 @@ uint64_t Defined::getVA() const {
   if (!isec->isFinal) {
     // A target arch that does not use thunks ought never ask for
     // the address of a function that has not yet been finalized.
-    assert(target->usesThunks());
+    assert(ctx.target->usesThunks());
 
     // ConcatOutputSection::finalize() can seek the address of a
     // function before its address is assigned. The thunking algorithm

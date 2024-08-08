@@ -9,6 +9,7 @@
 #ifndef LLD_ELF_CONFIG_H
 #define LLD_ELF_CONFIG_H
 
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseSet.h"
@@ -27,6 +28,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/TarWriter.h"
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -100,7 +102,7 @@ enum class SeparateSegmentKind { None, Code, Loadable };
 enum class GnuStackKind { None, Exec, NoExec };
 
 // For --lto=
-enum LtoKind : uint8_t {UnifiedThin, UnifiedRegular, Default};
+enum LtoKind : uint8_t { UnifiedThin, UnifiedRegular, Default };
 
 struct SymbolVersion {
   llvm::StringRef name;
@@ -117,8 +119,13 @@ struct VersionDefinition {
   SmallVector<SymbolVersion, 0> localPatterns;
 };
 
+class Ctx;
+
 class LinkerDriver {
 public:
+  LinkerDriver(Ctx &c);
+  ~LinkerDriver();
+
   void linkerMain(ArrayRef<const char *> args);
   void addFile(StringRef path, bool withLOption);
   void addLibrary(StringRef name);
@@ -130,6 +137,9 @@ private:
   template <class ELFT> void compileBitcodeFiles(bool skipLinkedOutput);
   bool tryAddFatLTOFile(MemoryBufferRef mb, StringRef archiveName,
                         uint64_t offsetInArchive, bool lazy);
+
+  Ctx &ctx;
+
   // True if we are in --whole-archive and --no-whole-archive.
   bool inWholeArchive = false;
 
@@ -152,7 +162,8 @@ struct Config {
   uint8_t osabi = 0;
   uint32_t andFeatures = 0;
   llvm::CachePruningPolicy thinLTOCachePolicy;
-  llvm::SetVector<llvm::CachedHashString> dependencyFiles; // for --dependency-file
+  llvm::SetVector<llvm::CachedHashString>
+      dependencyFiles; // for --dependency-file
   llvm::StringMap<uint64_t> sectionStartMap;
   llvm::StringRef bfdname;
   llvm::StringRef chroot;
@@ -435,81 +446,11 @@ struct Config {
   llvm::SmallVector<std::pair<llvm::GlobPattern, llvm::StringRef>, 0>
       remapInputsWildcards;
 };
+
 struct ConfigWrapper {
   Config c;
   Config *operator->() { return &c; }
 };
-
-LLVM_LIBRARY_VISIBILITY extern ConfigWrapper config;
-
-struct DuplicateSymbol {
-  const Symbol *sym;
-  const InputFile *file;
-  InputSectionBase *section;
-  uint64_t value;
-};
-
-struct Ctx {
-  LinkerDriver driver;
-  SmallVector<std::unique_ptr<MemoryBuffer>> memoryBuffers;
-  SmallVector<ELFFileBase *, 0> objectFiles;
-  SmallVector<SharedFile *, 0> sharedFiles;
-  SmallVector<BinaryFile *, 0> binaryFiles;
-  SmallVector<BitcodeFile *, 0> bitcodeFiles;
-  SmallVector<BitcodeFile *, 0> lazyBitcodeFiles;
-  SmallVector<InputSectionBase *, 0> inputSections;
-  SmallVector<EhInputSection *, 0> ehInputSections;
-  // Duplicate symbol candidates.
-  SmallVector<DuplicateSymbol, 0> duplicates;
-  // Symbols in a non-prevailing COMDAT group which should be changed to an
-  // Undefined.
-  SmallVector<std::pair<Symbol *, unsigned>, 0> nonPrevailingSyms;
-  // A tuple of (reference, extractedFile, sym). Used by --why-extract=.
-  SmallVector<std::tuple<std::string, const InputFile *, const Symbol &>, 0>
-      whyExtractRecords;
-  // A mapping from a symbol to an InputFile referencing it backward. Used by
-  // --warn-backrefs.
-  llvm::DenseMap<const Symbol *,
-                 std::pair<const InputFile *, const InputFile *>>
-      backwardReferences;
-  llvm::SmallSet<llvm::StringRef, 0> auxiliaryFiles;
-  // InputFile for linker created symbols with no source location.
-  InputFile *internalFile;
-  // True if SHT_LLVM_SYMPART is used.
-  std::atomic<bool> hasSympart{false};
-  // True if there are TLS IE relocations. Set DF_STATIC_TLS if -shared.
-  std::atomic<bool> hasTlsIe{false};
-  // True if we need to reserve two .got entries for local-dynamic TLS model.
-  std::atomic<bool> needsTlsLd{false};
-  // True if all native vtable symbols have corresponding type info symbols
-  // during LTO.
-  bool ltoAllVtablesHaveTypeInfos;
-
-  // Each symbol assignment and DEFINED(sym) reference is assigned an increasing
-  // order. Each DEFINED(sym) evaluation checks whether the reference happens
-  // before a possible `sym = expr;`.
-  unsigned scriptSymOrderCounter = 1;
-  llvm::DenseMap<const Symbol *, unsigned> scriptSymOrder;
-
-  void reset();
-
-  llvm::raw_fd_ostream openAuxiliaryFile(llvm::StringRef, std::error_code &);
-};
-
-LLVM_LIBRARY_VISIBILITY extern Ctx ctx;
-
-// The first two elements of versionDefinitions represent VER_NDX_LOCAL and
-// VER_NDX_GLOBAL. This helper returns other elements.
-static inline ArrayRef<VersionDefinition> namedVersionDefs() {
-  return llvm::ArrayRef(config->versionDefinitions).slice(2);
-}
-
-void errorOrWarn(const Twine &msg);
-
-static inline void internalLinkerError(StringRef loc, const Twine &msg) {
-  errorOrWarn(loc + "internal linker error: " + msg + "\n" +
-              llvm::getBugReportMsg());
-}
 
 } // namespace lld::elf
 

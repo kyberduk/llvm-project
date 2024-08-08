@@ -32,7 +32,7 @@ enum class CodeGenOptLevel;
 
 namespace lld {
 namespace macho {
-
+class Ctx;
 class InputSection;
 class Symbol;
 
@@ -97,7 +97,7 @@ public:
 
   bool empty() const { return literals.empty() && globs.empty(); }
   void clear();
-  void insert(llvm::StringRef symbolName);
+  void insert(Ctx&ctx,llvm::StringRef symbolName);
   bool matchLiteral(llvm::StringRef symbolName) const;
   bool matchGlob(llvm::StringRef symbolName) const;
   bool match(llvm::StringRef symbolName) const;
@@ -240,8 +240,6 @@ struct Configuration {
     return platformInfo.target.Platform;
   }
 };
-
-extern std::unique_ptr<Configuration> config;
 
 } // namespace macho
 } // namespace lld

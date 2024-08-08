@@ -17,12 +17,15 @@
 #include <vector>
 
 namespace lld {
+class CommonLinkerContext;
 
-llvm::SmallVector<uint8_t, 0> parseHex(llvm::StringRef s);
+llvm::SmallVector<uint8_t, 0> parseHex(CommonLinkerContext &ctx,
+                                       llvm::StringRef s);
 bool isValidCIdentifier(llvm::StringRef s);
 
 // Write the contents of the a buffer to a file
-void saveBuffer(llvm::StringRef buffer, const llvm::Twine &path);
+void saveBuffer(CommonLinkerContext &ctx, llvm::StringRef buffer,
+                const llvm::Twine &path);
 
 // A single pattern to match against. A pattern can either be double-quoted
 // text that should be matched exactly after removing the quoting marks or a
@@ -31,7 +34,7 @@ class SingleStringMatcher {
 public:
   // Create a StringPattern from Pattern to be matched exactly regardless
   // of globbing characters if ExactMatch is true.
-  SingleStringMatcher(llvm::StringRef Pattern);
+  SingleStringMatcher(CommonLinkerContext &ctx, llvm::StringRef Pattern);
 
   // Match s against this pattern, exactly if ExactMatch is true.
   bool match(llvm::StringRef s) const;
@@ -64,8 +67,8 @@ public:
   StringMatcher() = default;
 
   // Matcher for a single pattern.
-  StringMatcher(llvm::StringRef Pattern)
-      : patterns({SingleStringMatcher(Pattern)}) {}
+  StringMatcher(CommonLinkerContext &ctx, llvm::StringRef Pattern)
+      : patterns({SingleStringMatcher(ctx, Pattern)}) {}
 
   // Add a new pattern to the existing ones to match against.
   void addPattern(SingleStringMatcher Matcher) { patterns.push_back(Matcher); }

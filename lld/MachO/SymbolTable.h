@@ -36,6 +36,7 @@ class Undefined;
  */
 class SymbolTable {
 public:
+  SymbolTable(Ctx &c) : ctx(c) {}
   Defined *addDefined(StringRef name, InputFile *, InputSection *,
                       uint64_t value, uint64_t size, bool isWeakDef,
                       bool isPrivateExtern, bool isReferencedDynamically,
@@ -65,20 +66,20 @@ public:
   Symbol *find(StringRef name) { return find(llvm::CachedHashStringRef(name)); }
 
 private:
+  Ctx &ctx;
+
   std::pair<Symbol *, bool> insert(StringRef name, const InputFile *);
   llvm::DenseMap<llvm::CachedHashStringRef, int> symMap;
   std::vector<Symbol *> symVector;
 };
 
-void reportPendingUndefinedSymbols();
-void reportPendingDuplicateSymbols();
+void reportPendingUndefinedSymbols(Ctx&ctx);
+void reportPendingDuplicateSymbols(Ctx&ctx);
 
 // Call reportPendingUndefinedSymbols() to emit diagnostics.
-void treatUndefinedSymbol(const Undefined &, StringRef source);
-void treatUndefinedSymbol(const Undefined &, const InputSection *,
+void treatUndefinedSymbol(Ctx&ctx,const Undefined &, StringRef source);
+void treatUndefinedSymbol(Ctx&ctx,const Undefined &, const InputSection *,
                           uint64_t offset);
-
-extern std::unique_ptr<SymbolTable> symtab;
 
 } // namespace lld::macho
 

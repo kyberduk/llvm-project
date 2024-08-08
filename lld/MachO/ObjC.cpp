@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ObjC.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "InputSection.h"
 #include "Layout.h"
@@ -23,7 +24,7 @@ using namespace llvm::MachO;
 using namespace lld;
 using namespace lld::macho;
 
-template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
+template <class LP> static bool objectHasObjCSection(Ctx&ctx,MemoryBufferRef mb) {
   using SectionHeader = typename LP::section;
 
   auto *hdr =
@@ -32,7 +33,7 @@ template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
     return false;
 
   if (const auto *c =
-          findCommand<typename LP::segment_command>(hdr, LP::segmentLCType)) {
+          findCommand<typename LP::segment_command>(ctx,hdr, LP::segmentLCType)) {
     auto sectionHeaders = ArrayRef<SectionHeader>{
         reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
     for (const SectionHeader &secHead : sectionHeaders) {
@@ -51,19 +52,19 @@ template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
   return false;
 }
 
-static bool objectHasObjCSection(MemoryBufferRef mb) {
-  if (target->wordSize == 8)
-    return ::objectHasObjCSection<LP64>(mb);
+static bool objectHasObjCSection(Ctx&ctx,MemoryBufferRef mb) {
+  if (ctx.target->wordSize == 8)
+    return ::objectHasObjCSection<LP64>(ctx,mb);
   else
-    return ::objectHasObjCSection<ILP32>(mb);
+    return ::objectHasObjCSection<ILP32>(ctx,mb);
 }
 
-bool macho::hasObjCSection(MemoryBufferRef mb) {
+bool macho::hasObjCSection(Ctx&ctx,MemoryBufferRef mb) {
   switch (identify_magic(mb.getBuffer())) {
   case file_magic::macho_object:
-    return objectHasObjCSection(mb);
+    return objectHasObjCSection(ctx,mb);
   case file_magic::bitcode:
-    return check(isBitcodeContainingObjCCategory(mb));
+    return check(ctx,isBitcodeContainingObjCCategory(mb));
   default:
     return false;
   }
@@ -152,7 +153,7 @@ struct ObjcClass {
 
 class ObjcCategoryChecker {
 public:
-  ObjcCategoryChecker();
+  ObjcCategoryChecker(Ctx&ctx);
   void parseCategory(const ConcatInputSection *catListIsec);
 
 private:
@@ -161,7 +162,7 @@ private:
                     const Symbol *methodContainer,
                     const ConcatInputSection *containerIsec,
                     MethodContainerKind, MethodKind);
-
+Ctx&ctx;
   CategoryLayout catLayout;
   ClassLayout classLayout;
   ROClassLayout roClassLayout;
@@ -171,10 +172,10 @@ private:
   DenseMap<const Symbol *, ObjcClass> classMap;
 };
 
-ObjcCategoryChecker::ObjcCategoryChecker()
-    : catLayout(target->wordSize), classLayout(target->wordSize),
-      roClassLayout(target->wordSize), listHeaderLayout(target->wordSize),
-      methodLayout(target->wordSize) {}
+ObjcCategoryChecker::ObjcCategoryChecker(Ctx&c)
+    : ctx(c),catLayout(ctx.target->wordSize), classLayout(ctx.target->wordSize),
+      roClassLayout(ctx.target->wordSize), listHeaderLayout(ctx.target->wordSize),
+      methodLayout(ctx.target->wordSize) {}
 
 // \p r must point to an offset within a cstring section.
 static StringRef getReferentString(const Reloc &r) {
@@ -238,7 +239,7 @@ void ObjcCategoryChecker::parseMethods(const ConcatInputSection *methodsIsec,
         getReferentString(*containerIsec->getRelocAt(catLayout.nameOffset));
 
     StringRef containerType = mc.kind == MCK_Category ? "category" : "class";
-    warn("method '" + methPrefix + methodName.val() +
+    ctx.warn("method '" + methPrefix + methodName.val() +
          "' has conflicting definitions:\n>>> defined in category " +
          newCatName + " from " + toString(containerIsec->getFile()) +
          "\n>>> defined in " + containerType + " " + containerName + " from " +
@@ -299,9 +300,9 @@ void ObjcCategoryChecker::parseClass(const Defined *classSym) {
       parseMethods(classMethodsIsec, classSym, classIsec, MCK_Class, MK_Static);
 }
 
-void objc::checkCategories() {
-  ObjcCategoryChecker checker;
-  for (const InputSection *isec : inputSections) {
+void objc::checkCategories(Ctx&ctx) {
+  ObjcCategoryChecker checker(ctx);
+  for (const InputSection *isec : ctx.inputSections) {
     if (isec->getName() == section_names::objcCatList)
       for (const Reloc &r : isec->relocs) {
         auto *catIsec = cast<ConcatInputSection>(r.getReferentInputSection());

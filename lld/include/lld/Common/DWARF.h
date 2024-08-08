@@ -22,10 +22,11 @@ struct DILineInfo;
 } // namespace llvm
 
 namespace lld {
+class CommonLinkerContext;
 
 class DWARFCache {
 public:
-  DWARFCache(std::unique_ptr<llvm::DWARFContext> dwarf);
+  DWARFCache(CommonLinkerContext &ctx, std::unique_ptr<llvm::DWARFContext> dwarf);
   std::optional<llvm::DILineInfo> getDILineInfo(uint64_t offset,
                                                 uint64_t sectionIndex);
   std::optional<std::pair<std::string, unsigned>>

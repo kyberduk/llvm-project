@@ -22,6 +22,7 @@
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
 #include "llvm/Support/StringSaver.h"
+#include <mutex>
 
 namespace llvm {
 class raw_ostream;
@@ -34,28 +35,87 @@ public:
   CommonLinkerContext();
   virtual ~CommonLinkerContext();
 
-  static void destroy();
-
   llvm::BumpPtrAllocator bAlloc;
   llvm::StringSaver saver{bAlloc};
   llvm::DenseMap<void *, SpecificAllocBase *> instances;
 
   ErrorHandler e;
+
+  std::mutex makeMtx;
+
+  void error(const Twine &msg) { e.error(msg); }
+  void error(const Twine &msg, ErrorTag tag, ArrayRef<StringRef> args) {
+    e.error(msg, tag, args);
+  }
+  void fatal(const Twine &msg) { e.fatal(msg); }
+  void log(const Twine &msg) { e.log(msg); }
+  void message(const Twine &msg) { e.message(msg, e.outs()); }
+  void message(const Twine &msg, llvm::raw_ostream &s) { e.message(msg, s); }
+  void warn(const Twine &msg) { e.warn(msg); }
+  uint64_t errorCount() { return e.errorCount; }
+
+  raw_ostream &outs() { return e.outs(); }
+  raw_ostream &errs() { return e.errs(); }
+
+  // Creates new instances of T off a (almost) contiguous arena/object pool. The
+  // instances are destroyed whenever lldMain() goes out of scope.
+  template <typename T, typename... U> T *make(U &&...args) {
+    T* ptr;
+
+    {
+      std::lock_guard lock(makeMtx);
+      ptr = getSpecificAllocSingleton<T>(*this).Allocate();
+    }
+
+    return new (ptr) T(std::forward<U>(args)...);
+  }
+
+  template <typename T> T *makeN(size_t n) {
+    T* ptr;
+
+    {
+      std::lock_guard lock(makeMtx);
+      ptr = getSpecificAllocSingleton<T>(*this).Allocate(n);
+    }
+
+    return new (ptr) T[n];
+  }
 };
 
-// Retrieve the global state. Currently only one state can exist per process,
-// but in the future we plan on supporting an arbitrary number of LLD instances
-// in a single process.
-CommonLinkerContext &commonContext();
-
-template <typename T = CommonLinkerContext> T &context() {
-  return static_cast<T &>(commonContext());
+// check functions are convenient functions to strip errors
+// from error-or-value objects.
+template <class T> T check(CommonLinkerContext &ctx, ErrorOr<T> e) {
+  if (auto ec = e.getError())
+    ctx.fatal(ec.message());
+  return std::move(*e);
 }
 
-bool hasContext();
+template <class T> T check(CommonLinkerContext &ctx, Expected<T> e) {
+  if (!e)
+    ctx.fatal(llvm::toString(e.takeError()));
+  return std::move(*e);
+}
 
-inline llvm::StringSaver &saver() { return context().saver; }
-inline llvm::BumpPtrAllocator &bAlloc() { return context().bAlloc; }
+// Don't move from Expected wrappers around references.
+template <class T> T &check(CommonLinkerContext &ctx, Expected<T &> e) {
+  if (!e)
+    ctx.fatal(llvm::toString(e.takeError()));
+  return *e;
+}
+
+template <class T>
+T check2(CommonLinkerContext &ctx, ErrorOr<T> e, llvm::function_ref<std::string()> prefix) {
+  if (auto ec = e.getError())
+    ctx.fatal(prefix() + ": " + ec.message());
+  return std::move(*e);
+}
+
+template <class T>
+T check2(CommonLinkerContext &ctx, Expected<T> e, llvm::function_ref<std::string()> prefix) {
+  if (!e)
+    ctx.fatal(prefix() + ": " + toString(e.takeError()));
+  return std::move(*e);
+}
 } // namespace lld
 
 #endif

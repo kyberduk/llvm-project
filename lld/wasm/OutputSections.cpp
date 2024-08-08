@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "OutputSections.h"
+#include "Ctx.h"
 #include "InputChunks.h"
 #include "InputElement.h"
 #include "InputFiles.h"
@@ -43,7 +44,7 @@ void OutputSection::createHeader(size_t bodySize) {
   encodeULEB128(type, os);
   writeUleb128(os, bodySize, "section size");
   os.flush();
-  log("createHeader: " + toString(*this) + " body=" + Twine(bodySize) +
+  ctx.log("createHeader: " + toString(*this) + " body=" + Twine(bodySize) +
       " total=" + Twine(getSize()));
 }
 
@@ -66,10 +67,10 @@ void CodeSection::finalizeContents() {
 }
 
 void CodeSection::writeTo(uint8_t *buf) {
-  log("writing " + toString(*this) + " offset=" + Twine(offset) +
+  ctx.log("writing " + toString(*this) + " offset=" + Twine(offset) +
       " size=" + Twine(getSize()));
-  log(" headersize=" + Twine(header.size()));
-  log(" codeheadersize=" + Twine(codeSectionHeader.size()));
+  ctx.log(" headersize=" + Twine(header.size()));
+  ctx.log(" codeheadersize=" + Twine(codeSectionHeader.size()));
   buf += offset;
 
   // Write section header
@@ -107,14 +108,14 @@ void DataSection::finalizeContents() {
   });
 #endif
 
-  assert((config->sharedMemory || !ctx.isPic || config->extendedConst ||
+  assert((ctx.config->sharedMemory || !ctx.isPic || ctx.config->extendedConst ||
           activeCount <= 1) &&
          "output segments should have been combined by now");
 
   writeUleb128(os, segmentCount, "data segment count");
   os.flush();
   bodySize = dataSectionHeader.size();
-  bool is64 = config->is64.value_or(false);
+  bool is64 = ctx.config->is64.value_or(false);
 
   for (OutputSegment *segment : segments) {
     if (!segment->requiredInBinary())
@@ -124,9 +125,9 @@ void DataSection::finalizeContents() {
     if (segment->initFlags & WASM_DATA_SEGMENT_HAS_MEMINDEX)
       writeUleb128(os, 0, "memory index");
     if ((segment->initFlags & WASM_DATA_SEGMENT_IS_PASSIVE) == 0) {
-      if (ctx.isPic && config->extendedConst) {
+      if (ctx.isPic && ctx.config->extendedConst) {
         writeU8(os, WASM_OPCODE_GLOBAL_GET, "global get");
-        writeUleb128(os, WasmSym::memoryBase->getGlobalIndex(),
+        writeUleb128(os, ctx.ws.memoryBase->getGlobalIndex(),
                      "literal (global index)");
         if (segment->startVA) {
           writePtrConst(os, segment->startVA, is64, "offset");
@@ -139,11 +140,11 @@ void DataSection::finalizeContents() {
         if (ctx.isPic) {
           assert(segment->startVA == 0);
           initExpr.Inst.Opcode = WASM_OPCODE_GLOBAL_GET;
-          initExpr.Inst.Value.Global = WasmSym::memoryBase->getGlobalIndex();
+          initExpr.Inst.Value.Global = ctx.ws.memoryBase->getGlobalIndex();
         } else {
           initExpr = intConst(segment->startVA, is64);
         }
-        writeInitExpr(os, initExpr);
+        writeInitExpr(ctx,os, initExpr);
       }
     }
     writeUleb128(os, segment->size, "segment size");
@@ -151,7 +152,7 @@ void DataSection::finalizeContents() {
 
     segment->sectionOffset = bodySize;
     bodySize += segment->header.size() + segment->size;
-    log("Data segment: size=" + Twine(segment->size) + ", startVA=" +
+    ctx.log("Data segment: size=" + Twine(segment->size) + ", startVA=" +
         Twine::utohexstr(segment->startVA) + ", name=" + segment->name);
 
     for (InputChunk *inputSeg : segment->inputSegments) {
@@ -165,7 +166,7 @@ void DataSection::finalizeContents() {
 }
 
 void DataSection::writeTo(uint8_t *buf) {
-  log("writing " + toString(*this) + " offset=" + Twine(offset) +
+  ctx.log("writing " + toString(*this) + " offset=" + Twine(offset) +
       " size=" + Twine(getSize()) + " body=" + Twine(bodySize));
   buf += offset;
 
@@ -225,7 +226,7 @@ void CustomSection::finalizeInputSections() {
 
     if (!mergedSection) {
       mergedSection =
-          make<SyntheticMergedChunk>(name, 0, WASM_SEG_FLAG_STRINGS);
+          ctx.make<SyntheticMergedChunk>(ctx,name, 0, WASM_SEG_FLAG_STRINGS);
       newSections.push_back(mergedSection);
       mergedSection->outputSec = this;
     }
@@ -257,7 +258,7 @@ void CustomSection::finalizeContents() {
 }
 
 void CustomSection::writeTo(uint8_t *buf) {
-  log("writing " + toString(*this) + " offset=" + Twine(offset) +
+  ctx.log("writing " + toString(*this) + " offset=" + Twine(offset) +
       " size=" + Twine(getSize()) + " chunks=" + Twine(inputSections.size()));
 
   assert(offset);

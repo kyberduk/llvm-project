@@ -12,7 +12,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 namespace lld::macho {
-
+class Ctx;
 namespace objc {
 
 constexpr const char klass[] = "_OBJC_CLASS_$_";
@@ -21,11 +21,11 @@ constexpr const char ehtype[] = "_OBJC_EHTYPE_$_";
 constexpr const char ivar[] = "_OBJC_IVAR_$_";
 
 // Check for duplicate method names within related categories / classes.
-void checkCategories();
+void checkCategories(Ctx&ctx);
 
 } // namespace objc
 
-bool hasObjCSection(llvm::MemoryBufferRef);
+bool hasObjCSection(Ctx&ctx,llvm::MemoryBufferRef);
 
 } // namespace lld::macho
 

@@ -184,32 +184,32 @@ TpiSource::~TpiSource() {
 }
 
 TpiSource *lld::coff::makeTpiSource(COFFLinkerContext &ctx, ObjFile *file) {
-  return make<TpiSource>(ctx, TpiSource::Regular, file);
+  return ctx.make<TpiSource>(ctx, TpiSource::Regular, file);
 }
 
 TpiSource *lld::coff::makeTypeServerSource(COFFLinkerContext &ctx,
                                            PDBInputFile *pdbInputFile) {
   // Type server sources come in pairs: the TPI stream, and the IPI stream.
-  auto *tpiSource = make<TypeServerSource>(ctx, pdbInputFile);
+  auto *tpiSource = ctx.make<TypeServerSource>(ctx, pdbInputFile);
   if (pdbInputFile->session->getPDBFile().hasPDBIpiStream())
-    tpiSource->ipiSrc = make<TypeServerIpiSource>(ctx);
+    tpiSource->ipiSrc = ctx.make<TypeServerIpiSource>(ctx);
   return tpiSource;
 }
 
 TpiSource *lld::coff::makeUseTypeServerSource(COFFLinkerContext &ctx,
                                               ObjFile *file,
                                               TypeServer2Record ts) {
-  return make<UseTypeServerSource>(ctx, file, ts);
+  return ctx.make<UseTypeServerSource>(ctx, file, ts);
 }
 
 TpiSource *lld::coff::makePrecompSource(COFFLinkerContext &ctx, ObjFile *file) {
-  return make<PrecompSource>(ctx, file);
+  return ctx.make<PrecompSource>(ctx, file);
 }
 
 TpiSource *lld::coff::makeUsePrecompSource(COFFLinkerContext &ctx,
                                            ObjFile *file,
                                            PrecompRecord precomp) {
-  return make<UsePrecompSource>(ctx, file, precomp);
+  return ctx.make<UsePrecompSource>(ctx, file, precomp);
 }
 
 bool TpiSource::remapTypeIndex(TypeIndex &ti, TiRefKind refKind) const {
@@ -231,7 +231,7 @@ void TpiSource::remapRecord(MutableArrayRef<uint8_t> rec,
   for (const TiReference &ref : typeRefs) {
     unsigned byteSize = ref.Count * sizeof(TypeIndex);
     if (contents.size() < ref.Offset + byteSize)
-      fatal("symbol record too short");
+      ctx.fatal("symbol record too short");
 
     MutableArrayRef<TypeIndex> indices(
         reinterpret_cast<TypeIndex *>(contents.data() + ref.Offset), ref.Count);
@@ -241,10 +241,10 @@ void TpiSource::remapRecord(MutableArrayRef<uint8_t> rec,
           uint16_t kind =
               reinterpret_cast<const RecordPrefix *>(rec.data())->RecordKind;
           StringRef fname = file ? file->getName() : "<unknown PDB>";
-          log("failed to remap type index in record of kind 0x" +
-              utohexstr(kind) + " in " + fname + " with bad " +
-              (ref.Kind == TiRefKind::IndexRef ? "item" : "type") +
-              " index 0x" + utohexstr(ti.getIndex()));
+          ctx.log("failed to remap type index in record of kind 0x" +
+                  utohexstr(kind) + " in " + fname + " with bad " +
+                  (ref.Kind == TiRefKind::IndexRef ? "item" : "type") +
+                  " index 0x" + utohexstr(ti.getIndex()));
         }
         ti = TypeIndex(SimpleTypeKind::NotTranslated);
         continue;
@@ -320,8 +320,8 @@ Error TpiSource::mergeDebugT(TypeMerger *m) {
   std::optional<PCHMergerInfo> pchInfo;
   if (auto err = mergeTypeAndIdRecords(m->idTable, m->typeTable,
                                        indexMapStorage, types, pchInfo))
-    fatal("codeview::mergeTypeAndIdRecords failed: " +
-          toString(std::move(err)));
+    ctx.fatal("codeview::mergeTypeAndIdRecords failed: " +
+              toString(std::move(err)));
   if (pchInfo) {
     file->pchSignature = pchInfo->PCHSignature;
     endPrecompIdx = pchInfo->EndPrecompIndex;
@@ -364,26 +364,28 @@ Error TypeServerSource::mergeDebugT(TypeMerger *m) {
   pdb::PDBFile &pdbFile = pdbInputFile->session->getPDBFile();
   Expected<pdb::TpiStream &> expectedTpi = pdbFile.getPDBTpiStream();
   if (auto e = expectedTpi.takeError())
-    fatal("Type server does not have TPI stream: " + toString(std::move(e)));
+    ctx.fatal("Type server does not have TPI stream: " +
+              toString(std::move(e)));
   pdb::TpiStream *maybeIpi = nullptr;
   if (pdbFile.hasPDBIpiStream()) {
     Expected<pdb::TpiStream &> expectedIpi = pdbFile.getPDBIpiStream();
     if (auto e = expectedIpi.takeError())
-      fatal("Error getting type server IPI stream: " + toString(std::move(e)));
+      ctx.fatal("Error getting type server IPI stream: " +
+                toString(std::move(e)));
     maybeIpi = &*expectedIpi;
   }
 
   // Merge TPI first, because the IPI stream will reference type indices.
   if (auto err = mergeTypeRecords(m->typeTable, indexMapStorage,
                                   expectedTpi->typeArray()))
-    fatal("codeview::mergeTypeRecords failed: " + toString(std::move(err)));
+    ctx.fatal("codeview::mergeTypeRecords failed: " + toString(std::move(err)));
   tpiMap = indexMapStorage;
 
   // Merge IPI.
   if (maybeIpi) {
     if (auto err = mergeIdRecords(m->idTable, tpiMap, ipiSrc->indexMapStorage,
                                   maybeIpi->typeArray()))
-      fatal("codeview::mergeIdRecords failed: " + toString(std::move(err)));
+      ctx.fatal("codeview::mergeIdRecords failed: " + toString(std::move(err)));
     ipiMap = ipiSrc->indexMapStorage;
   }
 
@@ -572,8 +574,9 @@ void PrecompSource::registerMapping() {
   if (file->pchSignature && *file->pchSignature) {
     auto it = ctx.precompSourceMappings.emplace(*file->pchSignature, this);
     if (!it.second)
-      fatal("a PCH object with the same signature has already been provided (" +
-            toString(it.first->second->file) + " and " + toString(file) + ")");
+      ctx.fatal(
+          "a PCH object with the same signature has already been provided (" +
+          toString(it.first->second->file) + " and " + toString(file) + ")");
     registered = true;
   }
 }
@@ -611,13 +614,13 @@ void TpiSource::assignGHashesFromVector(
 
 // Faster way to iterate type records. forEachTypeChecked is faster than
 // iterating CVTypeArray. It avoids virtual readBytes calls in inner loops.
-static void forEachTypeChecked(ArrayRef<uint8_t> types,
+static void forEachTypeChecked(COFFLinkerContext &ctx, ArrayRef<uint8_t> types,
                                function_ref<void(const CVType &)> fn) {
-  checkError(
-      forEachCodeViewRecord<CVType>(types, [fn](const CVType &ty) -> Error {
-        fn(ty);
-        return Error::success();
-      }));
+  checkError(ctx, forEachCodeViewRecord<CVType>(
+                      types, [fn](const CVType &ty) -> Error {
+                        fn(ty);
+                        return Error::success();
+                      }));
 }
 
 // Walk over file->debugTypes and fill in the isItemIndex bit vector.
@@ -627,7 +630,7 @@ static void forEachTypeChecked(ArrayRef<uint8_t> types,
 void TpiSource::fillIsItemIndexFromDebugT() {
   uint32_t index = 0;
   isItemIndex.resize(ghashes.size());
-  forEachTypeChecked(file->debugTypes, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, file->debugTypes, [&](const CVType &ty) {
     if (isIdRecord(ty.kind()))
       isItemIndex.set(index);
     ++index;
@@ -656,7 +659,7 @@ void TpiSource::mergeTypeRecord(TypeIndex curIndex, CVType ty) {
 
   // Remap the type indices in the new record.
   remapTypesInTypeRecord(newRec);
-  uint32_t pdbHash = check(pdb::hashTypeRecord(CVType(newRec)));
+  uint32_t pdbHash = check(ctx, pdb::hashTypeRecord(CVType(newRec)));
   merged.recSizes.push_back(static_cast<uint16_t>(newSize));
   merged.recHashes.push_back(pdbHash);
 
@@ -674,8 +677,8 @@ void TpiSource::mergeTypeRecord(TypeIndex curIndex, CVType ty) {
       funcIdToType.push_back({funcId, funcType});
     } else {
       StringRef fname = file ? file->getName() : "<unknown PDB>";
-      warn("corrupt LF_[M]FUNC_ID record 0x" + utohexstr(curIndex.getIndex()) +
-           " in " + fname);
+      ctx.warn("corrupt LF_[M]FUNC_ID record 0x" +
+               utohexstr(curIndex.getIndex()) + " in " + fname);
     }
   }
 }
@@ -697,7 +700,7 @@ void TpiSource::mergeUniqueTypeRecords(ArrayRef<uint8_t> typeRecords,
   // Pre-compute the number of elements in advance to avoid std::vector resizes.
   unsigned nbTpiRecs = 0;
   unsigned nbIpiRecs = 0;
-  forEachTypeChecked(typeRecords, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, typeRecords, [&](const CVType &ty) {
     if (nextUniqueIndex != uniqueTypes.end() &&
         *nextUniqueIndex == ghashIndex) {
       assert(ty.length() <= codeview::MaxRecordLength);
@@ -713,7 +716,7 @@ void TpiSource::mergeUniqueTypeRecords(ArrayRef<uint8_t> typeRecords,
   // Do the actual type merge.
   ghashIndex = 0;
   nextUniqueIndex = uniqueTypes.begin();
-  forEachTypeChecked(typeRecords, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, typeRecords, [&](const CVType &ty) {
     if (nextUniqueIndex != uniqueTypes.end() &&
         *nextUniqueIndex == ghashIndex) {
       mergeTypeRecord(beginIndex + ghashIndex, ty);
@@ -756,7 +759,8 @@ void TypeServerSource::loadGHashes() {
   // Hash TPI stream.
   Expected<pdb::TpiStream &> expectedTpi = pdbFile.getPDBTpiStream();
   if (auto e = expectedTpi.takeError())
-    fatal("Type server does not have TPI stream: " + toString(std::move(e)));
+    ctx.fatal("Type server does not have TPI stream: " +
+              toString(std::move(e)));
   assignGHashesFromVector(
       GloballyHashedType::hashTypes(expectedTpi->typeArray()));
   isItemIndex.resize(ghashes.size());
@@ -766,7 +770,7 @@ void TypeServerSource::loadGHashes() {
     return;
   Expected<pdb::TpiStream &> expectedIpi = pdbFile.getPDBIpiStream();
   if (auto e = expectedIpi.takeError())
-    fatal("error retrieving IPI stream: " + toString(std::move(e)));
+    ctx.fatal("error retrieving IPI stream: " + toString(std::move(e)));
   ipiSrc->assignGHashesFromVector(
       GloballyHashedType::hashIds(expectedIpi->typeArray(), ghashes));
 
@@ -780,10 +784,10 @@ void TypeServerSource::loadGHashes() {
 // type servers is faster than iterating all object files compiled with /Z7 with
 // CVTypeArray, which has high overheads due to the virtual interface of
 // BinaryStream::readBytes.
-static ArrayRef<uint8_t> typeArrayToBytes(const CVTypeArray &types) {
+static ArrayRef<uint8_t> typeArrayToBytes(COFFLinkerContext &ctx, const CVTypeArray &types) {
   BinaryStreamRef stream = types.getUnderlyingStream();
   ArrayRef<uint8_t> debugTypes;
-  checkError(stream.readBytes(0, stream.getLength(), debugTypes));
+  checkError(ctx, stream.readBytes(0, stream.getLength(), debugTypes));
   return debugTypes;
 }
 
@@ -794,18 +798,18 @@ void TypeServerSource::remapTpiWithGHashes(GHashState *g) {
   // IPI merging depends on TPI, so do TPI first, then do IPI.  No need to
   // propagate errors, those should've been handled during ghash loading.
   pdb::PDBFile &pdbFile = pdbInputFile->session->getPDBFile();
-  pdb::TpiStream &tpi = check(pdbFile.getPDBTpiStream());
+  pdb::TpiStream &tpi = check(ctx, pdbFile.getPDBTpiStream());
   fillMapFromGHashes(g);
   tpiMap = indexMapStorage;
-  mergeUniqueTypeRecords(typeArrayToBytes(tpi.typeArray()));
+  mergeUniqueTypeRecords(typeArrayToBytes(ctx, tpi.typeArray()));
   if (pdbFile.hasPDBIpiStream()) {
-    pdb::TpiStream &ipi = check(pdbFile.getPDBIpiStream());
+    pdb::TpiStream &ipi = check(ctx, pdbFile.getPDBIpiStream());
     ipiSrc->indexMapStorage.resize(ipiSrc->ghashes.size());
     ipiSrc->fillMapFromGHashes(g);
     ipiMap = ipiSrc->indexMapStorage;
     ipiSrc->tpiMap = tpiMap;
     ipiSrc->ipiMap = ipiMap;
-    ipiSrc->mergeUniqueTypeRecords(typeArrayToBytes(ipi.typeArray()));
+    ipiSrc->mergeUniqueTypeRecords(typeArrayToBytes(ctx, ipi.typeArray()));
 
     if (ctx.config.showSummary) {
       nbTypeRecords = ipiSrc->ghashes.size();
@@ -836,12 +840,12 @@ void UseTypeServerSource::remapTpiWithGHashes(GHashState *g) {
 
 void PrecompSource::loadGHashes() {
   if (getDebugH(file)) {
-    warn("ignoring .debug$H section; pch with ghash is not implemented");
+    ctx.warn("ignoring .debug$H section; pch with ghash is not implemented");
   }
 
   uint32_t ghashIdx = 0;
   std::vector<GloballyHashedType> hashVec;
-  forEachTypeChecked(file->debugTypes, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, file->debugTypes, [&](const CVType &ty) {
     // Remember the index of the LF_ENDPRECOMP record so it can be excluded from
     // the PDB. There must be an entry in the list of ghashes so that the type
     // indexes of the following records in the /Yc PCH object line up.
@@ -864,7 +868,7 @@ void PrecompSource::loadGHashes() {
 void UsePrecompSource::loadGHashes() {
   auto e = findPrecompMap(file, precompDependency);
   if (!e) {
-    warn(toString(e.takeError()));
+    ctx.warn(toString(e.takeError()));
     return;
   }
 
@@ -875,7 +879,7 @@ void UsePrecompSource::loadGHashes() {
   // PCH source so we don't unnecessarily try to deduplicate them.
   std::vector<GloballyHashedType> hashVec =
       pchSrc->ghashes.take_front(precompDependency.getTypesCount());
-  forEachTypeChecked(file->debugTypes, [&](const CVType &ty) {
+  forEachTypeChecked(ctx, file->debugTypes, [&](const CVType &ty) {
     hashVec.push_back(GloballyHashedType::hashType(ty, hashVec, hashVec));
     isItemIndex.push_back(isIdRecord(ty.kind()));
   });
@@ -986,7 +990,7 @@ public:
   bool isItem() const { return data & (1ULL << 63U); }
 
   /// Get the ghash key for this cell.
-  GloballyHashedType getGHash(const COFFLinkerContext &ctx) const {
+  GloballyHashedType getGHash(COFFLinkerContext &ctx) const {
     return ctx.tpiSourceList[getTpiSrcIdx()]->ghashes[getGHashIdx()];
   }
 
@@ -1137,9 +1141,9 @@ void TypeMerger::mergeTypesWithGHash() {
       entries.push_back(cell);
   }
   parallelSort(entries, std::less<GHashCell>());
-  log(formatv("ghash table load factor: {0:p} (size {1} / capacity {2})\n",
-              tableSize ? double(entries.size()) / tableSize : 0,
-              entries.size(), tableSize));
+  ctx.log(formatv("ghash table load factor: {0:p} (size {1} / capacity {2})\n",
+                  tableSize ? double(entries.size()) / tableSize : 0,
+                  entries.size(), tableSize));
 
   // Find out how many type and item indices there are.
   auto mid = llvm::lower_bound(entries, GHashCell(true, 0, 0));
@@ -1148,8 +1152,8 @@ void TypeMerger::mergeTypesWithGHash() {
          "midpoint is not midpoint");
   uint32_t numTypes = std::distance(entries.begin(), mid);
   uint32_t numItems = std::distance(mid, entries.end());
-  log("Tpi record count: " + Twine(numTypes));
-  log("Ipi record count: " + Twine(numItems));
+  ctx.log("Tpi record count: " + Twine(numTypes));
+  ctx.log("Ipi record count: " + Twine(numItems));
 
   // Make a list of the "unique" type records to merge for each tpi source. Type
   // merging will skip indices not on this list. Store the destination PDB type

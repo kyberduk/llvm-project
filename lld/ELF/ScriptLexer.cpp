@@ -32,6 +32,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "ScriptLexer.h"
+#include "Config.h"
+#include "Ctx.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -90,18 +92,18 @@ std::string ScriptLexer::getCurrentLocation() {
   return (filename + ":" + Twine(getLineNumber())).str();
 }
 
-ScriptLexer::ScriptLexer(MemoryBufferRef mb) { tokenize(mb); }
+ScriptLexer::ScriptLexer(Ctx &c, MemoryBufferRef mb) : ctx(c) { tokenize(mb); }
 
 // We don't want to record cascading errors. Keep only the first one.
 void ScriptLexer::setError(const Twine &msg) {
-  if (errorCount())
+  if (ctx.errorCount())
     return;
 
   std::string s = (getCurrentLocation() + ": " + msg).str();
   if (pos)
     s += "\n>>> " + getLine().str() + "\n>>> " +
          std::string(getColumnNumber(), ' ') + "^";
-  error(s);
+  ctx.error(s);
 }
 
 // Split S into linker script tokens.
@@ -125,7 +127,7 @@ void ScriptLexer::tokenize(MemoryBufferRef mb) {
       if (e == StringRef::npos) {
         StringRef filename = mb.getBufferIdentifier();
         size_t lineno = begin.substr(0, s.data() - begin.data()).count('\n');
-        error(filename + ":" + Twine(lineno + 1) + ": unclosed quote");
+        ctx.error(filename + ":" + Twine(lineno + 1) + ": unclosed quote");
         return;
       }
 
@@ -191,7 +193,7 @@ StringRef ScriptLexer::skipSpace(StringRef s) {
 }
 
 // An erroneous token is handled as if it were the last token before EOF.
-bool ScriptLexer::atEOF() { return errorCount() || tokens.size() == pos; }
+bool ScriptLexer::atEOF() { return ctx.errorCount() || tokens.size() == pos; }
 
 // Split a given string as an expression.
 // This function returns "3", "*" and "5" for "3*5" for example.
@@ -242,7 +244,7 @@ static std::vector<StringRef> tokenizeExpr(StringRef s) {
 //
 // This function may split the current token into multiple tokens.
 void ScriptLexer::maybeSplitExpr() {
-  if (!inExpr || errorCount() || atEOF())
+  if (!inExpr || ctx.errorCount() || atEOF())
     return;
 
   std::vector<StringRef> v = tokenizeExpr(tokens[pos]);
@@ -255,7 +257,7 @@ void ScriptLexer::maybeSplitExpr() {
 StringRef ScriptLexer::next() {
   maybeSplitExpr();
 
-  if (errorCount())
+  if (ctx.errorCount())
     return "";
   if (atEOF()) {
     setError("unexpected EOF");
@@ -266,7 +268,7 @@ StringRef ScriptLexer::next() {
 
 StringRef ScriptLexer::peek() {
   StringRef tok = next();
-  if (errorCount())
+  if (ctx.errorCount())
     return "";
   pos = pos - 1;
   return tok;
@@ -275,7 +277,7 @@ StringRef ScriptLexer::peek() {
 StringRef ScriptLexer::peek2() {
   skip();
   StringRef tok = next();
-  if (errorCount())
+  if (ctx.errorCount())
     return "";
   pos = pos - 2;
   return tok;
@@ -304,7 +306,7 @@ bool ScriptLexer::consumeLabel(StringRef tok) {
 void ScriptLexer::skip() { (void)next(); }
 
 void ScriptLexer::expect(StringRef expect) {
-  if (errorCount())
+  if (ctx.errorCount())
     return;
   StringRef tok = next();
   if (tok != expect)

@@ -15,7 +15,7 @@
 
 namespace lld {
 namespace wasm {
-
+class Ctx;
 #ifdef LLVM_DEBUG
 void debugWrite(uint64_t offset, const Twine &msg);
 #else
@@ -49,9 +49,9 @@ void writePtrConst(raw_ostream &os, int64_t number, bool is64,
 
 void writeMemArg(raw_ostream &os, uint32_t alignment, uint64_t offset);
 
-void writeInitExpr(raw_ostream &os, const llvm::wasm::WasmInitExpr &initExpr);
+void writeInitExpr(Ctx&ctx,raw_ostream &os, const llvm::wasm::WasmInitExpr &initExpr);
 
-void writeInitExprMVP(raw_ostream &os,
+void writeInitExprMVP(Ctx&ctx,raw_ostream &os,
                       const llvm::wasm::WasmInitExprMVP &initExpr);
 
 void writeLimits(raw_ostream &os, const llvm::wasm::WasmLimits &limits);
@@ -60,9 +60,9 @@ void writeGlobalType(raw_ostream &os, const llvm::wasm::WasmGlobalType &type);
 
 void writeTableType(raw_ostream &os, const llvm::wasm::WasmTableType &type);
 
-void writeImport(raw_ostream &os, const llvm::wasm::WasmImport &import);
+void writeImport(Ctx&ctx,raw_ostream &os, const llvm::wasm::WasmImport &import);
 
-void writeExport(raw_ostream &os, const llvm::wasm::WasmExport &export_);
+void writeExport(Ctx&ctx,raw_ostream &os, const llvm::wasm::WasmExport &export_);
 
 } // namespace wasm
 

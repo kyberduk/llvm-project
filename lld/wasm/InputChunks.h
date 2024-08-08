@@ -31,7 +31,7 @@
 
 namespace lld {
 namespace wasm {
-
+class Ctx;
 class ObjFile;
 class OutputSegment;
 class OutputSection;
@@ -46,6 +46,8 @@ public:
     SyntheticFunction,
     Section,
   };
+
+  Ctx&ctx;
 
   StringRef name;
   StringRef debugName;
@@ -108,10 +110,8 @@ public:
   unsigned discarded : 1;
 
 protected:
-  InputChunk(ObjFile *f, Kind k, StringRef name, uint32_t alignment = 0,
-             uint32_t flags = 0)
-      : name(name), file(f), alignment(alignment), flags(flags), sectionKind(k),
-        live(!config->gcSections), discarded(false) {}
+  InputChunk(Ctx&ctx,ObjFile *f, Kind k, StringRef name, uint32_t alignment = 0,
+             uint32_t flags = 0);
   ArrayRef<uint8_t> data() const { return rawData; }
   uint64_t getTombstone() const;
 
@@ -129,8 +129,8 @@ protected:
 // each global variable.
 class InputSegment : public InputChunk {
 public:
-  InputSegment(const WasmSegment &seg, ObjFile *f)
-      : InputChunk(f, InputChunk::DataSegment, seg.Data.Name,
+  InputSegment(Ctx&ctx,const WasmSegment &seg, ObjFile *f)
+      : InputChunk(ctx,f, InputChunk::DataSegment, seg.Data.Name,
                    seg.Data.Alignment, seg.Data.LinkingFlags),
         segment(seg) {
     rawData = segment.Data.Content;
@@ -154,8 +154,7 @@ class SyntheticMergedChunk;
 // have to be as compact as possible, which is why we don't store the size (can
 // be found by looking at the next one).
 struct SectionPiece {
-  SectionPiece(size_t off, uint32_t hash, bool live)
-      : inputOff(off), live(live || !config->gcSections), hash(hash >> 1) {}
+  SectionPiece(Ctx&ctx,size_t off, uint32_t hash, bool live);
 
   uint32_t inputOff;
   uint32_t live : 1;
@@ -168,16 +167,16 @@ static_assert(sizeof(SectionPiece) == 16, "SectionPiece is too big");
 // This corresponds segments marked as WASM_SEG_FLAG_STRINGS.
 class MergeInputChunk : public InputChunk {
 public:
-  MergeInputChunk(const WasmSegment &seg, ObjFile *f)
-      : InputChunk(f, Merge, seg.Data.Name, seg.Data.Alignment,
+  MergeInputChunk(Ctx&ctx,const WasmSegment &seg, ObjFile *f)
+      : InputChunk(ctx,f, Merge, seg.Data.Name, seg.Data.Alignment,
                    seg.Data.LinkingFlags) {
     rawData = seg.Data.Content;
     comdat = seg.Data.Comdat;
     inputSectionOffset = seg.SectionOffset;
   }
 
-  MergeInputChunk(const WasmSection &s, ObjFile *f)
-      : InputChunk(f, Merge, s.Name, 0, llvm::wasm::WASM_SEG_FLAG_STRINGS) {
+  MergeInputChunk(Ctx&ctx,const WasmSection &s, ObjFile *f)
+      : InputChunk(ctx,f, Merge, s.Name, 0, llvm::wasm::WASM_SEG_FLAG_STRINGS) {
     assert(s.Type == llvm::wasm::WASM_SEC_CUSTOM);
     comdat = s.Comdat;
     rawData = s.Content;
@@ -222,8 +221,8 @@ private:
 // attached to regular output sections.
 class SyntheticMergedChunk : public InputChunk {
 public:
-  SyntheticMergedChunk(StringRef name, uint32_t alignment, uint32_t flags)
-      : InputChunk(nullptr, InputChunk::MergedChunk, name, alignment, flags),
+  SyntheticMergedChunk(Ctx&ctx,StringRef name, uint32_t alignment, uint32_t flags)
+      : InputChunk(ctx,nullptr, InputChunk::MergedChunk, name, alignment, flags),
         builder(llvm::StringTableBuilder::RAW, llvm::Align(1ULL << alignment)) {
   }
 
@@ -249,8 +248,8 @@ protected:
 // combined to create the final output CODE section.
 class InputFunction : public InputChunk {
 public:
-  InputFunction(const WasmSignature &s, const WasmFunction *func, ObjFile *f)
-      : InputChunk(f, InputChunk::Function, func->SymbolName), signature(s),
+  InputFunction(Ctx&ctx,const WasmSignature &s, const WasmFunction *func, ObjFile *f)
+      : InputChunk(ctx,f, InputChunk::Function, func->SymbolName), signature(s),
         function(func),
         exportName(func && func->ExportName ? (*func->ExportName).str()
                                             : std::optional<std::string>()) {
@@ -261,8 +260,8 @@ public:
     comdat = function->Comdat;
   }
 
-  InputFunction(StringRef name, const WasmSignature &s)
-      : InputChunk(nullptr, InputChunk::Function, name), signature(s) {}
+  InputFunction(Ctx&ctx,StringRef name, const WasmSignature &s)
+      : InputChunk(ctx,nullptr, InputChunk::Function, name), signature(s) {}
 
   static bool classof(const InputChunk *c) {
     return c->kind() == InputChunk::Function ||
@@ -309,9 +308,9 @@ protected:
 
 class SyntheticFunction : public InputFunction {
 public:
-  SyntheticFunction(const WasmSignature &s, StringRef name,
+  SyntheticFunction(Ctx&ctx,const WasmSignature &s, StringRef name,
                     StringRef debugName = {})
-      : InputFunction(name, s) {
+      : InputFunction(ctx,name, s) {
     sectionKind = InputChunk::SyntheticFunction;
     this->debugName = debugName;
   }
@@ -326,8 +325,8 @@ public:
 // Represents a single Wasm Section within an input file.
 class InputSection : public InputChunk {
 public:
-  InputSection(const WasmSection &s, ObjFile *f)
-      : InputChunk(f, InputChunk::Section, s.Name),
+  InputSection(Ctx&ctx,const WasmSection &s, ObjFile *f)
+      : InputChunk(ctx,f, InputChunk::Section, s.Name),
         tombstoneValue(getTombstoneForSection(s.Name)), section(s) {
     assert(section.Type == llvm::wasm::WASM_SEC_CUSTOM);
     comdat = section.Comdat;

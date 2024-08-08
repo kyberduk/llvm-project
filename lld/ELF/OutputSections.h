@@ -18,7 +18,7 @@
 #include <array>
 
 namespace lld::elf {
-
+class Ctx;
 struct PhdrEntry;
 
 struct CompressedData {
@@ -34,7 +34,7 @@ struct CompressedData {
 // non-overlapping file offsets and VAs.
 class OutputSection final : public SectionBase {
 public:
-  OutputSection(StringRef name, uint32_t type, uint64_t flags);
+  OutputSection(Ctx &ctx, StringRef name, uint32_t type, uint64_t flags);
 
   static bool classof(const SectionBase *s) {
     return s->kind() == SectionBase::Output;
@@ -46,7 +46,7 @@ public:
   uint32_t sectionIndex = UINT32_MAX;
   unsigned sortRank;
 
-  uint32_t getPhdrFlags() const;
+  uint32_t getPhdrFlags(Ctx &ctx) const;
 
   // Pointer to the PT_LOAD segment, which this section resides in. This field
   // is used to correctly compute file offset of a section. When two sections
@@ -72,9 +72,9 @@ public:
   uint64_t addr = 0;
   uint32_t shName = 0;
 
-  void recordSection(InputSectionBase *isec);
-  void commitSection(InputSection *isec);
-  void finalizeInputSections();
+  void recordSection(Ctx &ctx, InputSectionBase *isec);
+  void commitSection(Ctx &ctx, InputSection *isec);
+  void finalizeInputSections(Ctx &ctx);
 
   // The following members are normally only used in linker scripts.
   MemoryRegion *memRegion = nullptr;
@@ -105,12 +105,12 @@ public:
   // DATA_RELRO_END.
   bool relro = false;
 
-  void finalize();
+  void finalize(Ctx &ctx);
   template <class ELFT>
-  void writeTo(uint8_t *buf, llvm::parallel::TaskGroup &tg);
+  void writeTo(Ctx &ctx, uint8_t *buf, llvm::parallel::TaskGroup &tg);
   // Check that the addends for dynamic relocations were written correctly.
-  void checkDynRelAddends(const uint8_t *bufStart);
-  template <class ELFT> void maybeCompress();
+  void checkDynRelAddends(Ctx &ctx, const uint8_t *bufStart);
+  template <class ELFT> void maybeCompress(Ctx &ctx);
 
   void sort(llvm::function_ref<int(InputSectionBase *s)> order);
   void sortInitFini();
@@ -122,13 +122,13 @@ private:
   // Used for implementation of --compress-debug-sections option.
   CompressedData compressed;
 
-  std::array<uint8_t, 4> getFiller();
+  std::array<uint8_t, 4> getFiller(Ctx &ctx);
 };
 
 struct OutputDesc final : SectionCommand {
   OutputSection osec;
-  OutputDesc(StringRef name, uint32_t type, uint64_t flags)
-      : SectionCommand(OutputSectionKind), osec(name, type, flags) {}
+  OutputDesc(Ctx &ctx, StringRef name, uint32_t type, uint64_t flags)
+      : SectionCommand(OutputSectionKind), osec(ctx, name, type, flags) {}
 
   static bool classof(const SectionCommand *c) {
     return c->kind == OutputSectionKind;
@@ -146,19 +146,16 @@ getInputSections(const OutputSection &os,
 // globally accessible. Writer initializes them, so don't use them
 // until Writer is initialized.
 struct Out {
-  static uint8_t *bufferStart;
-  static PhdrEntry *tlsPhdr;
-  static OutputSection *elfHeader;
-  static OutputSection *programHeaders;
-  static OutputSection *preinitArray;
-  static OutputSection *initArray;
-  static OutputSection *finiArray;
+  uint8_t *bufferStart;
+  PhdrEntry *tlsPhdr;
+  OutputSection *elfHeader;
+  OutputSection *programHeaders;
+  OutputSection *preinitArray;
+  OutputSection *initArray;
+  OutputSection *finiArray;
 };
 
-uint64_t getHeaderSize();
-
-LLVM_LIBRARY_VISIBILITY extern llvm::SmallVector<OutputSection *, 0>
-    outputSections;
+uint64_t getHeaderSize(Ctx &ctx);
 } // namespace lld::elf
 
 #endif

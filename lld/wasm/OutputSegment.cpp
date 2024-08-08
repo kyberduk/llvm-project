@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "OutputSegment.h"
+#include "Ctx.h"
 #include "InputChunks.h"
 #include "lld/Common/Memory.h"
 
@@ -55,7 +56,7 @@ void OutputSegment::finalizeInputSegments() {
     if (i == mergedSegments.end()) {
       LLVM_DEBUG(llvm::dbgs() << "new merge segment: " << name
                               << " alignment=" << ms->alignment << "\n");
-      auto *syn = make<SyntheticMergedChunk>(name, ms->alignment, ms->flags);
+      auto *syn = ctx.make<SyntheticMergedChunk>(ctx,name, ms->alignment, ms->flags);
       syn->outputSeg = this;
       mergedSegments.push_back(syn);
       i = std::prev(mergedSegments.end());
@@ -78,6 +79,10 @@ void OutputSegment::finalizeInputSegments() {
     seg->outputSegmentOffset = size;
     size += seg->getSize();
   }
+}
+
+bool OutputSegment::requiredInBinary() const {
+  return !isBss || ctx.emitBssSegments;
 }
 
 } // namespace lld::wasm

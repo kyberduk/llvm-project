@@ -15,10 +15,13 @@
 #include <system_error>
 
 namespace lld {
+class CommonLinkerContext;
 void unlinkAsync(StringRef path);
 std::error_code tryCreateFile(StringRef path);
-std::unique_ptr<llvm::raw_fd_ostream> openFile(StringRef file);
-std::unique_ptr<llvm::raw_fd_ostream> openLTOOutputFile(StringRef file);
+std::unique_ptr<llvm::raw_fd_ostream> openFile(CommonLinkerContext &ctx,
+                                               StringRef file);
+std::unique_ptr<llvm::raw_fd_ostream>
+openLTOOutputFile(CommonLinkerContext &ctx, StringRef file);
 } // namespace lld
 
 #endif

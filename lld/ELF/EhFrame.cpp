@@ -17,6 +17,7 @@
 
 #include "EhFrame.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputSection.h"
 #include "Relocations.h"
 #include "Target.h"
@@ -35,14 +36,16 @@ using namespace lld::elf;
 namespace {
 class EhReader {
 public:
-  EhReader(InputSectionBase *s, ArrayRef<uint8_t> d) : isec(s), d(d) {}
+  EhReader(Ctx &c, InputSectionBase *s, ArrayRef<uint8_t> d)
+      : ctx(c), isec(s), d(d) {}
   uint8_t getFdeEncoding();
   bool hasLSDA();
 
 private:
   template <class P> void failOn(const P *loc, const Twine &msg) {
-    fatal("corrupted .eh_frame: " + msg + "\n>>> defined in " +
-          isec->getObjMsg((const uint8_t *)loc - isec->content().data()));
+    ctx.fatal(
+        "corrupted .eh_frame: " + msg + "\n>>> defined in " +
+        isec->getObjMsg(ctx, (const uint8_t *)loc - isec->content().data()));
   }
 
   uint8_t readByte();
@@ -52,10 +55,12 @@ private:
   void skipAugP();
   StringRef getAugmentation();
 
+  Ctx &ctx;
+
   InputSectionBase *isec;
   ArrayRef<uint8_t> d;
 };
-}
+} // namespace
 
 // Read a byte and advance D by one byte.
 uint8_t EhReader::readByte() {
@@ -97,11 +102,11 @@ void EhReader::skipLeb128() {
   failOn(errPos, "corrupted CIE (failed to read LEB128)");
 }
 
-static size_t getAugPSize(unsigned enc) {
+static size_t getAugPSize(Ctx &ctx, unsigned enc) {
   switch (enc & 0x0f) {
   case DW_EH_PE_absptr:
   case DW_EH_PE_signed:
-    return config->wordsize;
+    return ctx.config->wordsize;
   case DW_EH_PE_udata2:
   case DW_EH_PE_sdata2:
     return 2;
@@ -119,7 +124,7 @@ void EhReader::skipAugP() {
   uint8_t enc = readByte();
   if ((enc & 0xf0) == DW_EH_PE_aligned)
     failOn(d.data() - 1, "DW_EH_PE_aligned encoding is not supported");
-  size_t size = getAugPSize(enc);
+  size_t size = getAugPSize(ctx, enc);
   if (size == 0)
     failOn(d.data() - 1, "unknown FDE encoding");
   if (size >= d.size())
@@ -127,12 +132,12 @@ void EhReader::skipAugP() {
   d = d.slice(size);
 }
 
-uint8_t elf::getFdeEncoding(EhSectionPiece *p) {
-  return EhReader(p->sec, p->data()).getFdeEncoding();
+uint8_t elf::getFdeEncoding(Ctx &ctx, EhSectionPiece *p) {
+  return EhReader(ctx, p->sec, p->data()).getFdeEncoding();
 }
 
-bool elf::hasLSDA(const EhSectionPiece &p) {
-  return EhReader(p.sec, p.data()).hasLSDA();
+bool elf::hasLSDA(Ctx &ctx, const EhSectionPiece &p) {
+  return EhReader(ctx, p.sec, p.data()).hasLSDA();
 }
 
 StringRef EhReader::getAugmentation() {

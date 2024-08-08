@@ -25,6 +25,7 @@
 namespace lld::macho {
 LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
 
+class Ctx;
 class Symbol;
 class Defined;
 class DylibSymbol;
@@ -42,7 +43,7 @@ constexpr uint32_t UNWIND_MODE_MASK = UNWIND_X86_64_MODE_MASK;
 
 class TargetInfo {
 public:
-  template <class LP> TargetInfo(LP) {
+  template <class LP> TargetInfo(Ctx &c, LP) : ctx(c) {
     // Having these values available in TargetInfo allows us to access them
     // without having to resort to templates.
     magic = LP::magic;
@@ -87,12 +88,7 @@ public:
     llvm_unreachable("target does not use thunks");
   }
 
-  const RelocAttrs &getRelocAttrs(uint8_t type) const {
-    assert(type < relocAttrs.size() && "invalid relocation type");
-    if (type >= relocAttrs.size())
-      return invalidRelocAttrs;
-    return relocAttrs[type];
-  }
+  const RelocAttrs &getRelocAttrs(uint8_t type) const;
 
   bool hasAttr(uint8_t type, RelocAttrBits bit) const {
     return getRelocAttrs(type).hasAttr(bit);
@@ -109,6 +105,8 @@ public:
   }
 
   virtual void applyOptimizationHints(uint8_t *, const ObjFile &) const {};
+
+  Ctx &ctx;
 
   uint32_t magic;
   llvm::MachO::CPUType cpuType;
@@ -143,9 +141,9 @@ public:
   static constexpr uint64_t outOfRangeVA = 0xfull << 60;
 };
 
-TargetInfo *createX86_64TargetInfo();
-TargetInfo *createARM64TargetInfo();
-TargetInfo *createARM64_32TargetInfo();
+TargetInfo *createX86_64TargetInfo(Ctx&ctx);
+TargetInfo *createARM64TargetInfo(Ctx&ctx);
+TargetInfo *createARM64_32TargetInfo(Ctx&ctx);
 
 struct LP64 {
   using mach_header = llvm::MachO::mach_header_64;
@@ -178,8 +176,6 @@ struct ILP32 {
   static constexpr uint64_t pageZeroSize = 1ull << 12;
   static constexpr size_t wordSize = 4;
 };
-
-extern TargetInfo *target;
 
 } // namespace lld::macho
 

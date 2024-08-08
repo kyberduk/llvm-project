@@ -9,6 +9,7 @@
 #ifndef LLD_ELF_DRIVER_H
 #define LLD_ELF_DRIVER_H
 
+#include "Ctx.h"
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Option/ArgList.h"
@@ -19,7 +20,7 @@ namespace lld::elf {
 class ELFOptTable : public llvm::opt::GenericOptTable {
 public:
   ELFOptTable();
-  llvm::opt::InputArgList parse(ArrayRef<const char *> argv);
+  llvm::opt::InputArgList parse(Ctx &ctx, ArrayRef<const char *> argv);
 };
 
 // Create enum with OPT_xxx values for each option in Options.td
@@ -30,13 +31,13 @@ enum {
 #undef OPTION
 };
 
-void printHelp();
+void printHelp(Ctx &ctx);
 std::string createResponseFile(const llvm::opt::InputArgList &args);
 
-std::optional<std::string> findFromSearchPaths(StringRef path);
-std::optional<std::string> searchScript(StringRef path);
-std::optional<std::string> searchLibraryBaseName(StringRef path);
-std::optional<std::string> searchLibrary(StringRef path);
+std::optional<std::string> findFromSearchPaths(Ctx &ctx, StringRef path);
+std::optional<std::string> searchScript(Ctx &ctx, StringRef path);
+std::optional<std::string> searchLibraryBaseName(Ctx &ctx, StringRef path);
+std::optional<std::string> searchLibrary(Ctx &ctx, StringRef path);
 
 } // namespace lld::elf
 

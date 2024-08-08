@@ -34,12 +34,12 @@ class InputFile;
 class SectionChunk;
 
 // Short aliases.
-static const auto AMD64 = llvm::COFF::IMAGE_FILE_MACHINE_AMD64;
-static const auto ARM64 = llvm::COFF::IMAGE_FILE_MACHINE_ARM64;
-static const auto ARM64EC = llvm::COFF::IMAGE_FILE_MACHINE_ARM64EC;
-static const auto ARM64X = llvm::COFF::IMAGE_FILE_MACHINE_ARM64X;
-static const auto ARMNT = llvm::COFF::IMAGE_FILE_MACHINE_ARMNT;
-static const auto I386 = llvm::COFF::IMAGE_FILE_MACHINE_I386;
+static constexpr auto AMD64 = llvm::COFF::IMAGE_FILE_MACHINE_AMD64;
+static constexpr auto ARM64 = llvm::COFF::IMAGE_FILE_MACHINE_ARM64;
+static constexpr auto ARM64EC = llvm::COFF::IMAGE_FILE_MACHINE_ARM64EC;
+static constexpr auto ARM64X = llvm::COFF::IMAGE_FILE_MACHINE_ARM64X;
+static constexpr auto ARMNT = llvm::COFF::IMAGE_FILE_MACHINE_ARMNT;
+static constexpr auto I386 = llvm::COFF::IMAGE_FILE_MACHINE_I386;
 
 enum class ExportSource {
   Unset,

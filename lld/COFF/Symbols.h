@@ -64,7 +64,7 @@ public:
   Kind kind() const { return static_cast<Kind>(symbolKind); }
 
   // Returns the symbol name.
-  StringRef getName() {
+  StringRef getName(COFFLinkerContext &ctx) {
     // COFF symbol names are read lazily for a performance reason.
     // Non-external symbol names are never used by the linker except for logging
     // or debugging. Their internal references are resolved not by name but by
@@ -73,11 +73,11 @@ public:
     // StringRefs for them (which involves lots of strlen() on the string table)
     // is a waste of time.
     if (nameData == nullptr)
-      computeName();
+      computeName(ctx);
     return StringRef(nameData, nameSize);
   }
 
-  void replaceKeepingName(Symbol *other, size_t size);
+  void replaceKeepingName(COFFLinkerContext &ctx, Symbol *other, size_t size);
 
   // Returns the file from which this symbol was created.
   InputFile *getFile();
@@ -92,7 +92,7 @@ public:
   }
 
 private:
-  void computeName();
+  void computeName(COFFLinkerContext &ctx);
 
 protected:
   friend SymbolTable;
@@ -244,12 +244,12 @@ private:
 // Absolute symbols.
 class DefinedAbsolute : public Defined {
 public:
-  DefinedAbsolute(const COFFLinkerContext &c, StringRef n, COFFSymbolRef s)
+  DefinedAbsolute(COFFLinkerContext &c, StringRef n, COFFSymbolRef s)
       : Defined(DefinedAbsoluteKind, n), va(s.getValue()), ctx(c) {
     isExternal = s.isExternal();
   }
 
-  DefinedAbsolute(const COFFLinkerContext &c, StringRef n, uint64_t v)
+  DefinedAbsolute(COFFLinkerContext &c, StringRef n, uint64_t v)
       : Defined(DefinedAbsoluteKind, n), va(v), ctx(c) {}
 
   static bool classof(const Symbol *s) {
@@ -262,7 +262,7 @@ public:
 
 private:
   uint64_t va;
-  const COFFLinkerContext &ctx;
+  COFFLinkerContext &ctx;
 };
 
 // This symbol is used for linker-synthesized symbols like __ImageBase and
@@ -298,7 +298,7 @@ public:
 
   static bool classof(const Symbol *s) { return s->kind() == LazyArchiveKind; }
 
-  MemoryBufferRef getMemberBuffer();
+  MemoryBufferRef getMemberBuffer(COFFLinkerContext &ctx);
 
   ArchiveFile *file;
   const Archive::Symbol sym;
@@ -407,9 +407,7 @@ private:
 // This is here just for compatibility with MSVC.
 class DefinedLocalImport : public Defined {
 public:
-  DefinedLocalImport(COFFLinkerContext &ctx, StringRef n, Defined *s)
-      : Defined(DefinedLocalImportKind, n),
-        data(make<LocalImportChunk>(ctx, s)) {}
+  DefinedLocalImport(COFFLinkerContext &ctx, StringRef n, Defined *s);
 
   static bool classof(const Symbol *s) {
     return s->kind() == DefinedLocalImportKind;
@@ -504,8 +502,8 @@ void replaceSymbol(Symbol *s, ArgT &&... arg) {
 }
 } // namespace coff
 
-std::string toString(const coff::COFFLinkerContext &ctx, coff::Symbol &b);
-std::string toCOFFString(const coff::COFFLinkerContext &ctx,
+std::string toString(coff::COFFLinkerContext &ctx, coff::Symbol &b);
+std::string toCOFFString(coff::COFFLinkerContext &ctx,
                          const llvm::object::Archive::Symbol &b);
 
 } // namespace lld

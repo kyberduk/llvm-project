@@ -10,7 +10,8 @@
 #define LLD_MACHO_MAPFILE_H
 
 namespace lld::macho {
-void writeMapFile();
+class Ctx;
+void writeMapFile(Ctx &ctx);
 } // namespace lld::macho
 
 #endif

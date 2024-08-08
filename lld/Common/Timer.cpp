@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Common/Timer.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Format.h"
@@ -34,18 +35,18 @@ Timer::Timer(llvm::StringRef name, Timer &parent)
   parent.children.push_back(this);
 }
 
-void Timer::print() {
+void Timer::print(CommonLinkerContext &ctx) {
   double totalDuration = static_cast<double>(millis());
 
   // We want to print the grand total under all the intermediate phases, so we
   // print all children first, then print the total under that.
   for (const auto &child : children)
     if (child->total > 0)
-      child->print(1, totalDuration);
+      child->print(ctx, 1, totalDuration);
 
-  message(std::string(50, '-'));
+  ctx.message(std::string(50, '-'));
 
-  print(0, millis(), false);
+  print(ctx, 0, millis(), false);
 }
 
 double Timer::millis() const {
@@ -54,7 +55,8 @@ double Timer::millis() const {
       .count();
 }
 
-void Timer::print(int depth, double totalDuration, bool recurse) const {
+void Timer::print(CommonLinkerContext &ctx, int depth, double totalDuration,
+                  bool recurse) const {
   double p = 100.0 * millis() / totalDuration;
 
   SmallString<32> str;
@@ -62,11 +64,11 @@ void Timer::print(int depth, double totalDuration, bool recurse) const {
   std::string s = std::string(depth * 2, ' ') + name + std::string(":");
   stream << format("%-30s%7d ms (%5.1f%%)", s.c_str(), (int)millis(), p);
 
-  message(str);
+  ctx.message(str);
 
   if (recurse) {
     for (const auto &child : children)
       if (child->total > 0)
-        child->print(depth + 1, totalDuration);
+        child->print(ctx, depth + 1, totalDuration);
   }
 }

@@ -10,8 +10,8 @@
 #define LLD_MACHO_MARKLIVE_H
 
 namespace lld::macho {
-
-void markLive();
+class Ctx;
+void markLive(Ctx&ctx);
 
 } // namespace lld::macho
 

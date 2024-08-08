@@ -18,7 +18,6 @@
 #include <vector>
 
 namespace lld::macho {
-
 namespace segment_names {
 
 constexpr const char dataConst[] = "__DATA_CONST";
@@ -40,7 +39,7 @@ class InputSection;
 
 class OutputSegment {
 public:
-  void addOutputSection(OutputSection *os);
+  void addOutputSection(Ctx&ctx,OutputSection *os);
   void sortOutputSections();
   void assignAddressesToStartEndSymbols();
 
@@ -65,12 +64,9 @@ private:
   std::vector<OutputSection *> sections;
 };
 
-extern std::vector<OutputSegment *> outputSegments;
+void sortOutputSegments(Ctx&ctx);
 
-void sortOutputSegments();
-void resetOutputSegments();
-
-OutputSegment *getOrCreateOutputSegment(StringRef name);
+OutputSegment *getOrCreateOutputSegment(Ctx&ctx,StringRef name);
 
 } // namespace lld::macho
 

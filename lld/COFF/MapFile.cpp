@@ -96,7 +96,7 @@ static void sortUniqueSymbols(std::vector<Defined *> &syms,
 }
 
 // Returns the lists of all symbols that we want to print out.
-static void getSymbols(const COFFLinkerContext &ctx,
+static void getSymbols(COFFLinkerContext &ctx,
                        std::vector<Defined *> &syms,
                        std::vector<Defined *> &staticSyms) {
 
@@ -141,7 +141,7 @@ static void getSymbols(const COFFLinkerContext &ctx,
 
 // Construct a map from symbols to their stringified representations.
 static DenseMap<Defined *, std::string>
-getSymbolStrings(const COFFLinkerContext &ctx, ArrayRef<Defined *> syms) {
+getSymbolStrings(COFFLinkerContext &ctx, ArrayRef<Defined *> syms) {
   std::vector<std::string> str(syms.size());
   parallelFor((size_t)0, syms.size(), [&](size_t i) {
     raw_string_ostream os(str[i]);
@@ -184,7 +184,7 @@ getSymbolStrings(const COFFLinkerContext &ctx, ArrayRef<Defined *> syms) {
     }
     writeHeader(os, sectionIdx, address);
     os << "       ";
-    os << left_justify(sym->getName(), 26);
+    os << left_justify(sym->getName(ctx), 26);
     os << " ";
     os << format_hex_no_prefix((ctx.config.imageBase + sym->getRVA()), 16);
     if (!fileDescr.empty()) {
@@ -208,7 +208,7 @@ void lld::coff::writeMapFile(COFFLinkerContext &ctx) {
   std::error_code ec;
   raw_fd_ostream os(ctx.config.mapFile, ec, sys::fs::OF_None);
   if (ec)
-    fatal("cannot open " + ctx.config.mapFile + ": " + ec.message());
+    ctx.fatal("cannot open " + ctx.config.mapFile + ": " + ec.message());
 
   ScopedTimer t1(ctx.totalMapTimer);
 

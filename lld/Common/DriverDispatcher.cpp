@@ -163,14 +163,6 @@ int unsafeLldMain(llvm::ArrayRef<const char *> args,
   int r = !d(argsV, stdoutOS, stderrOS, exitEarly, inTestOutputDisabled);
   // At this point 'r' is either 1 for error, and 0 for no error.
 
-  // Call exit() if we can to avoid calling destructors.
-  if (exitEarly)
-    exitLld(r);
-
-  // Delete the global context and clear the global context pointer, so that it
-  // cannot be accessed anymore.
-  CommonLinkerContext::destroy();
-
   return r;
 }
 } // namespace lld
@@ -191,12 +183,5 @@ Result lld::lldMain(llvm::ArrayRef<const char *> args,
       return {crc.RetCode, /*canRunAgain=*/false};
   }
 
-  // Cleanup memory and reset everything back in pristine condition. This path
-  // is only taken when LLD is in test, or when it is used as a library.
-  llvm::CrashRecoveryContext crc;
-  if (!crc.RunSafely([&]() { CommonLinkerContext::destroy(); })) {
-    // The memory is corrupted beyond any possible recovery.
-    return {r, /*canRunAgain=*/false};
-  }
   return {r, /*canRunAgain=*/true};
 }

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Config.h"
+#include "Ctx.h"
 #include "Driver.h"
 #include "InputFiles.h"
 #include "ObjC.h"
@@ -59,28 +60,28 @@ MachOOptTable::MachOOptTable() : GenericOptTable(optInfo) {}
 
 // Set color diagnostics according to --color-diagnostics={auto,always,never}
 // or --no-color-diagnostics flags.
-static void handleColorDiagnostics(InputArgList &args) {
+static void handleColorDiagnostics(Ctx &ctx, InputArgList &args) {
   const Arg *arg =
       args.getLastArg(OPT_color_diagnostics, OPT_color_diagnostics_eq,
                       OPT_no_color_diagnostics);
   if (!arg)
     return;
   if (arg->getOption().getID() == OPT_color_diagnostics) {
-    lld::errs().enable_colors(true);
+    ctx.errs().enable_colors(true);
   } else if (arg->getOption().getID() == OPT_no_color_diagnostics) {
-    lld::errs().enable_colors(false);
+    ctx.errs().enable_colors(false);
   } else {
     StringRef s = arg->getValue();
     if (s == "always")
-      lld::errs().enable_colors(true);
+      ctx.errs().enable_colors(true);
     else if (s == "never")
-      lld::errs().enable_colors(false);
+      ctx.errs().enable_colors(false);
     else if (s != "auto")
-      error("unknown option: --color-diagnostics=" + s);
+      ctx.error("unknown option: --color-diagnostics=" + s);
   }
 }
 
-InputArgList MachOOptTable::parse(ArrayRef<const char *> argv) {
+InputArgList MachOOptTable::parse(Ctx &ctx, ArrayRef<const char *> argv) {
   // Make InputArgList from string vectors.
   unsigned missingIndex;
   unsigned missingCount;
@@ -88,35 +89,35 @@ InputArgList MachOOptTable::parse(ArrayRef<const char *> argv) {
 
   // Expand response files (arguments in the form of @<filename>)
   // and then parse the argument again.
-  cl::ExpandResponseFiles(saver(), cl::TokenizeGNUCommandLine, vec);
+  cl::ExpandResponseFiles(ctx.saver, cl::TokenizeGNUCommandLine, vec);
   InputArgList args = ParseArgs(vec, missingIndex, missingCount);
 
   // Handle -fatal_warnings early since it converts missing argument warnings
   // to errors.
-  errorHandler().fatalWarnings = args.hasArg(OPT_fatal_warnings);
-  errorHandler().suppressWarnings = args.hasArg(OPT_w);
+  ctx.e.fatalWarnings = args.hasArg(OPT_fatal_warnings);
+  ctx.e.suppressWarnings = args.hasArg(OPT_w);
 
   if (missingCount)
-    error(Twine(args.getArgString(missingIndex)) + ": missing argument");
+    ctx.error(Twine(args.getArgString(missingIndex)) + ": missing argument");
 
-  handleColorDiagnostics(args);
+  handleColorDiagnostics(ctx, args);
 
   for (const Arg *arg : args.filtered(OPT_UNKNOWN)) {
     std::string nearest;
     if (findNearest(arg->getAsString(args), nearest) > 1)
-      error("unknown argument '" + arg->getAsString(args) + "'");
+      ctx.error("unknown argument '" + arg->getAsString(args) + "'");
     else
-      error("unknown argument '" + arg->getAsString(args) +
-            "', did you mean '" + nearest + "'");
+      ctx.error("unknown argument '" + arg->getAsString(args) +
+                "', did you mean '" + nearest + "'");
   }
   return args;
 }
 
-void MachOOptTable::printHelp(const char *argv0, bool showHidden) const {
-  OptTable::printHelp(lld::outs(),
+void MachOOptTable::printHelp(Ctx&ctx, const char *argv0, bool showHidden) const {
+  OptTable::printHelp(ctx.outs(),
                       (std::string(argv0) + " [options] file...").c_str(),
                       "LLVM Linker", showHidden);
-  lld::outs() << "\n";
+  ctx.outs() << "\n";
 }
 
 static std::string rewritePath(StringRef s) {
@@ -125,17 +126,17 @@ static std::string rewritePath(StringRef s) {
   return std::string(s);
 }
 
-static std::string rewriteInputPath(StringRef s) {
+static std::string rewriteInputPath(Ctx &ctx, StringRef s) {
   // Don't bother rewriting "absolute" paths that are actually under the
   // syslibroot; simply rewriting the syslibroot is sufficient.
-  if (rerootPath(s) == s && fs::exists(s))
+  if (rerootPath(ctx, s) == s && fs::exists(s))
     return relativeToRoot(s);
   return std::string(s);
 }
 
 // Reconstructs command line arguments so that so that you can re-run
 // the same command with the same inputs. This is for --reproduce.
-std::string macho::createResponseFile(const InputArgList &args) {
+std::string macho::createResponseFile(Ctx &ctx, const InputArgList &args) {
   SmallString<0> data;
   raw_svector_ostream os(data);
 
@@ -145,21 +146,21 @@ std::string macho::createResponseFile(const InputArgList &args) {
     case OPT_reproduce:
       break;
     case OPT_INPUT:
-      os << quote(rewriteInputPath(arg->getValue())) << "\n";
+      os << quote(rewriteInputPath(ctx, arg->getValue())) << "\n";
       break;
     case OPT_o:
       os << "-o " << quote(path::filename(arg->getValue())) << "\n";
       break;
     case OPT_filelist:
-      if (std::optional<MemoryBufferRef> buffer = readFile(arg->getValue()))
+      if (std::optional<MemoryBufferRef> buffer = readFile(ctx,arg->getValue()))
         for (StringRef path : args::getLines(*buffer))
-          os << quote(rewriteInputPath(path)) << "\n";
+          os << quote(rewriteInputPath(ctx, path)) << "\n";
       break;
     case OPT_force_load:
     case OPT_weak_library:
     case OPT_load_hidden:
       os << arg->getSpelling() << " "
-         << quote(rewriteInputPath(arg->getValue())) << "\n";
+         << quote(rewriteInputPath(ctx, arg->getValue())) << "\n";
       break;
     case OPT_F:
     case OPT_L:
@@ -183,38 +184,36 @@ std::string macho::createResponseFile(const InputArgList &args) {
   return std::string(data);
 }
 
-static void searchedDylib(const Twine &path, bool found) {
-  if (config->printDylibSearch)
-    message("searched " + path + (found ? ", found " : ", not found"));
+static void searchedDylib(Ctx &ctx, const Twine &path, bool found) {
+  if (ctx.config->printDylibSearch)
+    ctx.message("searched " + path + (found ? ", found " : ", not found"));
   if (!found)
-    depTracker->logFileNotFound(path);
+    ctx.depTracker->logFileNotFound(path);
 }
 
-std::optional<StringRef> macho::resolveDylibPath(StringRef dylibPath) {
+std::optional<StringRef> macho::resolveDylibPath(Ctx &ctx,
+                                                 StringRef dylibPath) {
   // TODO: if a tbd and dylib are both present, we should check to make sure
   // they are consistent.
   SmallString<261> tbdPath = dylibPath;
   path::replace_extension(tbdPath, ".tbd");
   bool tbdExists = fs::exists(tbdPath);
-  searchedDylib(tbdPath, tbdExists);
+  searchedDylib(ctx, tbdPath, tbdExists);
   if (tbdExists)
-    return saver().save(tbdPath.str());
+    return ctx.saver.save(tbdPath.str());
 
   bool dylibExists = fs::exists(dylibPath);
-  searchedDylib(dylibPath, dylibExists);
+  searchedDylib(ctx, dylibPath, dylibExists);
   if (dylibExists)
-    return saver().save(dylibPath);
+    return ctx.saver.save(dylibPath);
   return {};
 }
 
-// It's not uncommon to have multiple attempts to load a single dylib,
-// especially if it's a commonly re-exported core library.
-static DenseMap<CachedHashStringRef, DylibFile *> loadedDylibs;
-
-DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
-                            bool isBundleLoader, bool explicitlyLinked) {
+DylibFile *macho::loadDylib(Ctx &ctx, MemoryBufferRef mbref,
+                            DylibFile *umbrella, bool isBundleLoader,
+                            bool explicitlyLinked) {
   CachedHashStringRef path(mbref.getBufferIdentifier());
-  DylibFile *&file = loadedDylibs[path];
+  DylibFile *&file = ctx.loadedDylibs[path];
   if (file) {
     if (explicitlyLinked)
       file->setExplicitlyLinked();
@@ -226,12 +225,12 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
   if (magic == file_magic::tapi_file) {
     Expected<std::unique_ptr<InterfaceFile>> result = TextAPIReader::get(mbref);
     if (!result) {
-      error("could not load TAPI file at " + mbref.getBufferIdentifier() +
-            ": " + toString(result.takeError()));
+      ctx.error("could not load TAPI file at " + mbref.getBufferIdentifier() +
+                ": " + toString(result.takeError()));
       return nullptr;
     }
-    file =
-        make<DylibFile>(**result, umbrella, isBundleLoader, explicitlyLinked);
+    file = ctx.make<DylibFile>(ctx,**result, umbrella, isBundleLoader,
+                               explicitlyLinked);
 
     // parseReexports() can recursively call loadDylib(). That's fine since
     // we wrote the DylibFile we just loaded to the loadDylib cache via the
@@ -246,7 +245,8 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
            magic == file_magic::macho_dynamically_linked_shared_lib_stub ||
            magic == file_magic::macho_executable ||
            magic == file_magic::macho_bundle);
-    file = make<DylibFile>(mbref, umbrella, isBundleLoader, explicitlyLinked);
+    file =
+        ctx.make<DylibFile>(ctx,mbref, umbrella, isBundleLoader, explicitlyLinked);
 
     // parseLoadCommands() can also recursively call loadDylib(). See comment
     // in previous block for why this means we must copy `file` here.
@@ -257,10 +257,8 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
   return newFile;
 }
 
-void macho::resetLoadedDylibs() { loadedDylibs.clear(); }
-
 std::optional<StringRef>
-macho::findPathCombination(const Twine &name,
+macho::findPathCombination(Ctx &ctx, const Twine &name,
                            const std::vector<StringRef> &roots,
                            ArrayRef<StringRef> extensions) {
   SmallString<261> base;
@@ -270,27 +268,27 @@ macho::findPathCombination(const Twine &name,
     for (StringRef ext : extensions) {
       Twine location = base + ext;
       bool exists = fs::exists(location);
-      searchedDylib(location, exists);
+      searchedDylib(ctx, location, exists);
       if (exists)
-        return saver().save(location.str());
+        return ctx.saver.save(location.str());
     }
   }
   return {};
 }
 
-StringRef macho::rerootPath(StringRef path) {
+StringRef macho::rerootPath(Ctx &ctx, StringRef path) {
   if (!path::is_absolute(path, path::Style::posix) || path.ends_with(".o"))
     return path;
 
   if (std::optional<StringRef> rerootedPath =
-          findPathCombination(path, config->systemLibraryRoots))
+          findPathCombination(ctx, path, ctx.config->systemLibraryRoots))
     return *rerootedPath;
 
   return path;
 }
 
-uint32_t macho::getModTime(StringRef path) {
-  if (config->zeroModTime)
+uint32_t macho::getModTime(Ctx &ctx, StringRef path) {
+  if (ctx.config->zeroModTime)
     return 0;
 
   fs::file_status stat;
@@ -298,22 +296,23 @@ uint32_t macho::getModTime(StringRef path) {
     if (fs::exists(stat))
       return toTimeT(stat.getLastModificationTime());
 
-  warn("failed to get modification time of " + path);
+  ctx.warn("failed to get modification time of " + path);
   return 0;
 }
 
-void macho::printArchiveMemberLoad(StringRef reason, const InputFile *f) {
-  if (config->printEachFile)
-    message(toString(f));
-  if (config->printWhyLoad)
-    message(reason + " forced load of " + toString(f));
+void macho::printArchiveMemberLoad(Ctx &ctx, StringRef reason,
+                                   const InputFile *f) {
+  if (ctx.config->printEachFile)
+    ctx.message(toString(f));
+  if (ctx.config->printWhyLoad)
+    ctx.message(reason + " forced load of " + toString(f));
 }
 
-macho::DependencyTracker::DependencyTracker(StringRef path)
-    : path(path), active(!path.empty()) {
+macho::DependencyTracker::DependencyTracker(Ctx &c, StringRef path)
+    : ctx(c), path(path), active(!path.empty()) {
   if (active && fs::exists(path) && !fs::can_write(path)) {
-    warn("Ignoring dependency_info option since specified path is not "
-         "writeable.");
+    ctx.warn("Ignoring dependency_info option since specified path is not "
+             "writeable.");
     active = false;
   }
 }
@@ -327,7 +326,7 @@ void macho::DependencyTracker::write(StringRef version,
   std::error_code ec;
   raw_fd_ostream os(path, ec, fs::OF_None);
   if (ec) {
-    warn("Error writing dependency info to file");
+    ctx.warn("Error writing dependency info to file");
     return;
   }
 

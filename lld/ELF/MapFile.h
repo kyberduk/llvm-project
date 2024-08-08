@@ -10,7 +10,8 @@
 #define LLD_ELF_MAPFILE_H
 
 namespace lld::elf {
-void writeMapAndCref();
-}
+class Ctx;
+void writeMapAndCref(Ctx &ctx);
+} // namespace lld::elf
 
 #endif

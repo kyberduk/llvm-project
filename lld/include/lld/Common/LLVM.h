@@ -58,8 +58,6 @@ struct WasmTableType;
 } // namespace llvm
 
 namespace lld {
-llvm::raw_ostream &outs();
-llvm::raw_ostream &errs();
 
 // Casting operators.
 using llvm::cast;

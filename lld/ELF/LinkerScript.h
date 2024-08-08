@@ -43,9 +43,9 @@ struct ExprValue {
   ExprValue(uint64_t val) : ExprValue(nullptr, false, val, "") {}
 
   bool isAbsolute() const { return forceAbsolute || sec == nullptr; }
-  uint64_t getValue() const;
-  uint64_t getSecAddr() const;
-  uint64_t getSectionOffset() const;
+  uint64_t getValue(Ctx &ctx) const;
+  uint64_t getSecAddr(Ctx &ctx) const;
+  uint64_t getSectionOffset(Ctx &ctx) const;
 
   // If a value is relative to a section, it has a non-null Sec.
   SectionBase *sec;
@@ -76,7 +76,7 @@ enum SectionsCommandKind {
   AssignmentKind, // . = expr or <sym> = expr
   OutputSectionKind,
   InputSectionKind,
-  ByteKind    // BYTE(expr), SHORT(expr), LONG(expr) or QUAD(expr)
+  ByteKind // BYTE(expr), SHORT(expr), LONG(expr) or QUAD(expr)
 };
 
 struct SectionCommand {
@@ -156,8 +156,8 @@ struct MemoryRegion {
   uint32_t negInvFlags;
   uint64_t curPos = 0;
 
-  uint64_t getOrigin() const { return origin().getValue(); }
-  uint64_t getLength() const { return length().getValue(); }
+  uint64_t getOrigin(Ctx &ctx) const { return origin().getValue(ctx); }
+  uint64_t getLength(Ctx &ctx) const { return length().getValue(ctx); }
 
   bool compatibleWith(uint32_t secFlags) const {
     if ((secFlags & negFlags) || (~secFlags & negInvFlags))
@@ -195,10 +195,8 @@ class InputSectionDescription : public SectionCommand {
   mutable std::optional<std::pair<const InputFile *, bool>> matchesFileCache;
 
 public:
-  InputSectionDescription(StringRef filePattern, uint64_t withFlags = 0,
-                          uint64_t withoutFlags = 0)
-      : SectionCommand(InputSectionKind), filePat(filePattern),
-        withFlags(withFlags), withoutFlags(withoutFlags) {}
+  InputSectionDescription(Ctx &ctx, StringRef filePattern,
+                          uint64_t withFlags = 0, uint64_t withoutFlags = 0);
 
   static bool classof(const SectionCommand *c) {
     return c->kind == InputSectionKind;
@@ -268,7 +266,7 @@ class LinkerScript final {
   // that must be reinitialized for each call to the above functions, and must
   // not be used outside of the scope of a call to the above functions.
   struct AddressState {
-    AddressState();
+    AddressState(Ctx &ctx);
     OutputSection *outSec = nullptr;
     MemoryRegion *memRegion = nullptr;
     MemoryRegion *lmaRegion = nullptr;
@@ -299,6 +297,8 @@ class LinkerScript final {
 
   void assignOffsets(OutputSection *sec);
 
+  Ctx &ctx;
+
   // This captures the local AddressState and makes it accessible
   // deliberately. This is needed as there are some cases where we cannot just
   // thread the current state through to a lambda function created by the
@@ -312,6 +312,7 @@ class LinkerScript final {
   uint64_t dot;
 
 public:
+  LinkerScript(Ctx &c) : ctx(c) {}
   OutputDesc *createOutputSection(StringRef name, StringRef location);
   OutputDesc *getOrCreateOutputSection(StringRef name);
 
@@ -380,8 +381,6 @@ public:
   // Sections that will be warned/errored by --orphan-handling.
   SmallVector<const InputSectionBase *, 0> orphanSections;
 };
-
-LLVM_LIBRARY_VISIBILITY extern std::unique_ptr<LinkerScript> script;
 
 } // end namespace lld::elf
 

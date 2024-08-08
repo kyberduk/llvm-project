@@ -141,18 +141,19 @@ bool AutoExporter::shouldExport(Defined *sym) const {
   // disallow import symbols.
   if (!isa<DefinedRegular>(sym) && !isa<DefinedCommon>(sym))
     return false;
-  if (excludeSymbols.count(sym->getName()) || manualExcludeSymbols.count(sym->getName()))
+  if (excludeSymbols.count(sym->getName(ctx)) ||
+      manualExcludeSymbols.count(sym->getName(ctx)))
     return false;
 
   for (StringRef prefix : excludeSymbolPrefixes.keys())
-    if (sym->getName().starts_with(prefix))
+    if (sym->getName(ctx).starts_with(prefix))
       return false;
   for (StringRef suffix : excludeSymbolSuffixes.keys())
-    if (sym->getName().ends_with(suffix))
+    if (sym->getName(ctx).ends_with(suffix))
       return false;
 
   // If a corresponding __imp_ symbol exists and is defined, don't export it.
-  if (ctx.symtab.find(("__imp_" + sym->getName()).str()))
+  if (ctx.symtab.find(("__imp_" + sym->getName(ctx)).str()))
     return false;
 
   // Check that file is non-null before dereferencing it, symbols not
@@ -171,32 +172,33 @@ bool AutoExporter::shouldExport(Defined *sym) const {
   return !excludeObjects.count(fileName);
 }
 
-void lld::coff::writeDefFile(StringRef name,
+void lld::coff::writeDefFile(COFFLinkerContext &ctx, StringRef name,
                              const std::vector<Export> &exports) {
   llvm::TimeTraceScope timeScope("Write .def file");
   std::error_code ec;
   raw_fd_ostream os(name, ec, sys::fs::OF_None);
   if (ec)
-    fatal("cannot open " + name + ": " + ec.message());
+    ctx.fatal("cannot open " + name + ": " + ec.message());
 
   os << "EXPORTS\n";
   for (const Export &e : exports) {
-    os << "    " << e.exportName << " "
-       << "@" << e.ordinal;
+    os << "    " << e.exportName << " " << "@" << e.ordinal;
     if (auto *def = dyn_cast_or_null<Defined>(e.sym)) {
       if (def && def->getChunk() &&
-          !(def->getChunk()->getOutputCharacteristics() & IMAGE_SCN_MEM_EXECUTE))
+          !(def->getChunk()->getOutputCharacteristics() &
+            IMAGE_SCN_MEM_EXECUTE))
         os << " DATA";
     }
     os << "\n";
   }
 }
 
-static StringRef mangle(Twine sym, MachineTypes machine) {
+static StringRef mangle(COFFLinkerContext &ctx, Twine sym,
+                        MachineTypes machine) {
   assert(machine != IMAGE_FILE_MACHINE_UNKNOWN);
   if (machine == I386)
-    return saver().save("_" + sym);
-  return saver().save(sym);
+    return ctx.saver.save("_" + sym);
+  return ctx.saver.save(sym);
 }
 
 // Handles -wrap option.
@@ -219,9 +221,9 @@ lld::coff::addWrappedSymbols(COFFLinkerContext &ctx, opt::InputArgList &args) {
       continue;
 
     Symbol *real =
-        ctx.symtab.addUndefined(mangle("__real_" + name, ctx.config.machine));
+        ctx.symtab.addUndefined(mangle(ctx, "__real_" + name, ctx.config.machine));
     Symbol *wrap =
-        ctx.symtab.addUndefined(mangle("__wrap_" + name, ctx.config.machine));
+        ctx.symtab.addUndefined(mangle(ctx, "__wrap_" + name, ctx.config.machine));
     v.push_back({sym, real, wrap});
 
     // These symbols may seem undefined initially, but don't bail out
@@ -255,14 +257,14 @@ void lld::coff::wrapSymbols(COFFLinkerContext &ctx,
     map[w.sym] = w.wrap;
     map[w.real] = w.sym;
     if (Defined *d = dyn_cast<Defined>(w.wrap)) {
-      Symbol *imp = ctx.symtab.find(("__imp_" + w.sym->getName()).str());
+      Symbol *imp = ctx.symtab.find(("__imp_" + w.sym->getName(ctx)).str());
       // Create a new defined local import for the wrap symbol. If
       // no imp prefixed symbol existed, there's no need for it.
       // (We can't easily distinguish whether any object file actually
       // referenced it or not, though.)
       if (imp) {
-        DefinedLocalImport *wrapimp = make<DefinedLocalImport>(
-            ctx, saver().save("__imp_" + w.wrap->getName()), d);
+        DefinedLocalImport *wrapimp = ctx.make<DefinedLocalImport>(
+            ctx, ctx.saver.save("__imp_" + w.wrap->getName(ctx)), d);
         ctx.symtab.localImportChunks.push_back(wrapimp->getChunk());
         map[imp] = wrapimp;
       }

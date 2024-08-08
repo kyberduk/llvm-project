@@ -11,8 +11,10 @@
 
 namespace lld::elf {
 
-template <class ELFT> void doIcf();
+class Ctx;
 
-}
+template <class ELFT> void doIcf(Ctx &ctx);
+
+} // namespace lld::elf
 
 #endif

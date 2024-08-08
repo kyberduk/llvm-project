@@ -33,8 +33,6 @@ class SyntheticSection;
 template <class ELFT> class ObjFile;
 class OutputSection;
 
-LLVM_LIBRARY_VISIBILITY extern std::vector<Partition> partitions;
-
 // Returned by InputSectionBase::relsOrRelas. At least one member is empty.
 template <class ELFT> struct RelsOrRelas {
   ArrayRef<typename ELFT::Rel> rels;
@@ -69,7 +67,7 @@ public:
   // The 1-indexed partition that this section is assigned to by the garbage
   // collector, or 0 if this section is dead. Normally there is only one
   // partition, so this will either be 0 or 1.
-  elf::Partition &getPartition() const;
+  elf::Partition &getPartition(Ctx &ctx) const;
 
   // These corresponds to the fields in Elf_Shdr.
   uint64_t flags;
@@ -85,9 +83,9 @@ public:
 
   // Translate an offset in the input section to an offset in the output
   // section.
-  uint64_t getOffset(uint64_t offset) const;
+  uint64_t getOffset(Ctx &ctx, uint64_t offset) const;
 
-  uint64_t getVA(uint64_t offset = 0) const;
+  uint64_t getVA(Ctx &ctx, uint64_t offset = 0) const;
 
   bool isLive() const { return partition != 0; }
   void markLive() { partition = 1; }
@@ -124,10 +122,11 @@ struct RelaxAux {
 class InputSectionBase : public SectionBase {
 public:
   template <class ELFT>
-  InputSectionBase(ObjFile<ELFT> &file, const typename ELFT::Shdr &header,
-                   StringRef name, Kind sectionKind);
+  InputSectionBase(Ctx &ctx, ObjFile<ELFT> &file,
+                   const typename ELFT::Shdr &header, StringRef name,
+                   Kind sectionKind);
 
-  InputSectionBase(InputFile *file, uint64_t flags, uint32_t type,
+  InputSectionBase(Ctx &ctx, InputFile *file, uint64_t flags, uint32_t type,
                    uint64_t entsize, uint32_t link, uint32_t info,
                    uint32_t addralign, ArrayRef<uint8_t> data, StringRef name,
                    Kind sectionKind);
@@ -186,9 +185,9 @@ public:
   ArrayRef<uint8_t> content() const {
     return ArrayRef<uint8_t>(content_, size);
   }
-  ArrayRef<uint8_t> contentMaybeDecompress() const {
+  ArrayRef<uint8_t> contentMaybeDecompress(Ctx &ctx) const {
     if (compressed)
-      decompress();
+      decompress(ctx);
     return content();
   }
 
@@ -202,7 +201,7 @@ public:
   llvm::TinyPtrVector<InputSection *> dependentSections;
 
   // Returns the size of this section (even if this is a common or BSS.)
-  size_t getSize() const;
+  size_t getSize(Ctx &ctx) const;
 
   InputSection *getLinkOrderDep() const;
 
@@ -214,17 +213,17 @@ public:
   }
 
   // Returns a source location string. Used to construct an error message.
-  std::string getLocation(uint64_t offset) const;
-  std::string getSrcMsg(const Symbol &sym, uint64_t offset) const;
-  std::string getObjMsg(uint64_t offset) const;
+  std::string getLocation(Ctx &ctx, uint64_t offset) const;
+  std::string getSrcMsg(Ctx &ctx, const Symbol &sym, uint64_t offset) const;
+  std::string getObjMsg(Ctx &ctx, uint64_t offset) const;
 
   // Each section knows how to relocate itself. These functions apply
   // relocations, assuming that Buf points to this section's copy in
   // the mmap'ed output buffer.
-  template <class ELFT> void relocate(uint8_t *buf, uint8_t *bufEnd);
-  static uint64_t getRelocTargetVA(const InputFile *File, RelType Type,
-                                   int64_t A, uint64_t P, const Symbol &Sym,
-                                   RelExpr Expr);
+  template <class ELFT> void relocate(Ctx &ctx, uint8_t *buf, uint8_t *bufEnd);
+  static uint64_t getRelocTargetVA(Ctx &ctx, const InputFile *File,
+                                   RelType Type, int64_t A, uint64_t P,
+                                   const Symbol &Sym, RelExpr Expr);
 
   // The native ELF reloc data type is not very convenient to handle.
   // So we convert ELF reloc records to our own records in Relocations.cpp.
@@ -256,8 +255,7 @@ public:
   // to relocation. See https://gcc.gnu.org/wiki/SplitStacks for more
   // information.
   template <typename ELFT>
-  void adjustSplitStackFunctionPrologues(uint8_t *buf, uint8_t *end);
-
+  void adjustSplitStackFunctionPrologues(Ctx &ctx, uint8_t *buf, uint8_t *end);
 
   template <typename T> llvm::ArrayRef<T> getDataAs() const {
     size_t s = content().size();
@@ -266,9 +264,8 @@ public:
   }
 
 protected:
-  template <typename ELFT>
-  void parseCompressedHeader();
-  void decompress() const;
+  template <typename ELFT> void parseCompressedHeader(Ctx &ctx);
+  void decompress(Ctx &ctx) const;
 };
 
 // SectionPiece represents a piece of splittable section contents.
@@ -292,17 +289,17 @@ static_assert(sizeof(SectionPiece) == 16, "SectionPiece is too big");
 class MergeInputSection : public InputSectionBase {
 public:
   template <class ELFT>
-  MergeInputSection(ObjFile<ELFT> &f, const typename ELFT::Shdr &header,
-                    StringRef name);
-  MergeInputSection(uint64_t flags, uint32_t type, uint64_t entsize,
+  MergeInputSection(Ctx &ctx, ObjFile<ELFT> &f,
+                    const typename ELFT::Shdr &header, StringRef name);
+  MergeInputSection(Ctx &ctx, uint64_t flags, uint32_t type, uint64_t entsize,
                     ArrayRef<uint8_t> data, StringRef name);
 
   static bool classof(const SectionBase *s) { return s->kind() == Merge; }
-  void splitIntoPieces();
+  void splitIntoPieces(Ctx &ctx);
 
   // Translate an offset in the input section to an offset in the parent
   // MergeSyntheticSection.
-  uint64_t getParentOffset(uint64_t offset) const;
+  uint64_t getParentOffset(Ctx &ctx, uint64_t offset) const;
 
   // Splittable sections are handled as a sequence of data
   // rather than a single large blob of data.
@@ -319,9 +316,9 @@ public:
   }
 
   // Returns the SectionPiece at a given input section offset.
-  SectionPiece &getSectionPiece(uint64_t offset);
-  const SectionPiece &getSectionPiece(uint64_t offset) const {
-    return const_cast<MergeInputSection *>(this)->getSectionPiece(offset);
+  SectionPiece &getSectionPiece(Ctx &ctx, uint64_t offset);
+  const SectionPiece &getSectionPiece(Ctx &ctx, uint64_t offset) const {
+    return const_cast<MergeInputSection *>(this)->getSectionPiece(ctx, offset);
   }
 
   SyntheticSection *getParent() const {
@@ -329,8 +326,8 @@ public:
   }
 
 private:
-  void splitStrings(StringRef s, size_t size);
-  void splitNonStrings(ArrayRef<uint8_t> a, size_t size);
+  void splitStrings(Ctx &ctx, StringRef s, size_t size);
+  void splitNonStrings(Ctx &ctx, ArrayRef<uint8_t> a, size_t size);
 };
 
 struct EhSectionPiece {
@@ -353,11 +350,11 @@ struct EhSectionPiece {
 class EhInputSection : public InputSectionBase {
 public:
   template <class ELFT>
-  EhInputSection(ObjFile<ELFT> &f, const typename ELFT::Shdr &header,
+  EhInputSection(Ctx &ctx, ObjFile<ELFT> &f, const typename ELFT::Shdr &header,
                  StringRef name);
   static bool classof(const SectionBase *s) { return s->kind() == EHFrame; }
-  template <class ELFT> void split();
-  template <class ELFT, class RelTy> void split(ArrayRef<RelTy> rels);
+  template <class ELFT> void split(Ctx &ctx);
+  template <class ELFT, class RelTy> void split(Ctx &ctx, ArrayRef<RelTy> rels);
 
   // Splittable sections are handled as a sequence of data
   // rather than a single large blob of data.
@@ -373,10 +370,11 @@ public:
 // .eh_frame. It also includes the synthetic sections themselves.
 class InputSection : public InputSectionBase {
 public:
-  InputSection(InputFile *f, uint64_t flags, uint32_t type, uint32_t addralign,
-               ArrayRef<uint8_t> data, StringRef name, Kind k = Regular);
+  InputSection(Ctx &ctx, InputFile *f, uint64_t flags, uint32_t type,
+               uint32_t addralign, ArrayRef<uint8_t> data, StringRef name,
+               Kind k = Regular);
   template <class ELFT>
-  InputSection(ObjFile<ELFT> &f, const typename ELFT::Shdr &header,
+  InputSection(Ctx &ctx, ObjFile<ELFT> &f, const typename ELFT::Shdr &header,
                StringRef name);
 
   static bool classof(const SectionBase *s) {
@@ -386,7 +384,7 @@ public:
 
   // Write this section to a mmap'ed file, assuming Buf is pointing to
   // beginning of the output section.
-  template <class ELFT> void writeTo(uint8_t *buf);
+  template <class ELFT> void writeTo(Ctx &ctx, uint8_t *buf);
 
   OutputSection *getParent() const {
     return reinterpret_cast<OutputSection *>(parent);
@@ -401,7 +399,7 @@ public:
   InputSectionBase *getRelocatedSection() const;
 
   template <class ELFT, class RelTy>
-  void relocateNonAlloc(uint8_t *buf, llvm::ArrayRef<RelTy> rels);
+  void relocateNonAlloc(Ctx &ctx, uint8_t *buf, llvm::ArrayRef<RelTy> rels);
 
   // Points to the canonical section. If ICF folds two sections, repl pointer of
   // one section points to the other.
@@ -413,13 +411,13 @@ public:
   // Called by ICF to merge two input sections.
   void replace(InputSection *other);
 
-  static InputSection discarded;
-
 private:
-  template <class ELFT, class RelTy> void copyRelocations(uint8_t *buf);
+  template <class ELFT, class RelTy>
+  void copyRelocations(Ctx &ctx, uint8_t *buf);
 
   template <class ELFT, class RelTy, class RelIt>
-  void copyRelocations(uint8_t *buf, llvm::iterator_range<RelIt> rels);
+  void copyRelocations(Ctx &ctx, uint8_t *buf,
+                       llvm::iterator_range<RelIt> rels);
 
   template <class ELFT> void copyShtGroup(uint8_t *buf);
 };
@@ -428,19 +426,17 @@ static_assert(sizeof(InputSection) <= 160, "InputSection is too big");
 
 class SyntheticSection : public InputSection {
 public:
-  SyntheticSection(uint64_t flags, uint32_t type, uint32_t addralign,
-                   StringRef name)
-      : InputSection(ctx.internalFile, flags, type, addralign, {}, name,
-                     InputSectionBase::Synthetic) {}
+  SyntheticSection(Ctx &ctx, uint64_t flags, uint32_t type, uint32_t addralign,
+                   StringRef name);
 
   virtual ~SyntheticSection() = default;
-  virtual size_t getSize() const = 0;
-  virtual bool updateAllocSize() { return false; }
+  virtual size_t getSize(Ctx &ctx) const = 0;
+  virtual bool updateAllocSize(Ctx &ctx) { return false; }
   // If the section has the SHF_ALLOC flag and the size may be changed if
   // thunks are added, update the section size.
-  virtual bool isNeeded() const { return true; }
-  virtual void finalizeContents() {}
-  virtual void writeTo(uint8_t *buf) = 0;
+  virtual bool isNeeded(Ctx &ctx) const { return true; }
+  virtual void finalizeContents(Ctx &ctx) {}
+  virtual void writeTo(Ctx &ctx, uint8_t *buf) = 0;
 
   static bool classof(const SectionBase *sec) {
     return sec->kind() == InputSectionBase::Synthetic;
@@ -452,14 +448,9 @@ inline bool isDebugSection(const InputSectionBase &sec) {
          sec.name.starts_with(".debug");
 }
 
-// The set of TOC entries (.toc + addend) for which we should not apply
-// toc-indirect to toc-relative relaxation. const Symbol * refers to the
-// STT_SECTION symbol associated to the .toc input section.
-extern llvm::DenseSet<std::pair<const Symbol *, uint64_t>> ppc64noTocRelax;
-
 } // namespace elf
 
-std::string toString(const elf::InputSectionBase *);
+std::string toString(elf::Ctx &ctx, const elf::InputSectionBase *);
 } // namespace lld
 
 #endif

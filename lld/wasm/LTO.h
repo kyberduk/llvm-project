@@ -33,19 +33,20 @@ class LTO;
 } // namespace llvm
 
 namespace lld::wasm {
-
+class Ctx;
 class BitcodeFile;
 class InputFile;
 
 class BitcodeCompiler {
 public:
-  BitcodeCompiler();
+  BitcodeCompiler(Ctx&ctx);
   ~BitcodeCompiler();
 
   void add(BitcodeFile &f);
   std::vector<StringRef> compile();
 
 private:
+Ctx&ctx;
   std::unique_ptr<llvm::lto::LTO> ltoObj;
   std::vector<SmallString<0>> buf;
   std::vector<std::unique_ptr<MemoryBuffer>> files;

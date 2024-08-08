@@ -16,9 +16,9 @@
 namespace lld::macho {
 class Symbol;
 
-void markAddrSigSymbols();
+void markAddrSigSymbols(Ctx&ctx);
 void markSymAsAddrSig(Symbol *s);
-void foldIdenticalSections(bool onlyCfStrings);
+void foldIdenticalSections(Ctx&ctx,bool onlyCfStrings);
 
 } // namespace lld::macho
 

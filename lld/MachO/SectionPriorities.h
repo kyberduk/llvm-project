@@ -18,6 +18,7 @@ using SectionPair = std::pair<const InputSection *, const InputSection *>;
 
 class PriorityBuilder {
 public:
+  PriorityBuilder(Ctx &c) : ctx(c) {}
   // Reads every input section's call graph profile, and combines them into
   // callGraphProfile. If an order file is present, any edges where one or both
   // of the vertices are specified in the order file are discarded.
@@ -68,13 +69,11 @@ private:
     // The priority given to a matching symbol from a particular object file.
     llvm::DenseMap<llvm::StringRef, size_t> objectFiles;
   };
-
+  Ctx &ctx;
   std::optional<size_t> getSymbolPriority(const Defined *sym);
   llvm::DenseMap<llvm::StringRef, SymbolPriorityEntry> priorities;
   llvm::MapVector<SectionPair, uint64_t> callGraphProfile;
 };
-
-extern PriorityBuilder priorityBuilder;
 } // namespace lld::macho
 
 #endif

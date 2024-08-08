@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace lld::macho {
-
+class Ctx;
 struct TrieNode;
 class Symbol;
 
@@ -41,7 +41,7 @@ private:
 using TrieEntryCallback =
     llvm::function_ref<void(const llvm::Twine & /*name*/, uint64_t /*flags*/)>;
 
-void parseTrie(const uint8_t *buf, size_t size, const TrieEntryCallback &);
+void parseTrie(Ctx&ctx,const uint8_t *buf, size_t size, const TrieEntryCallback &);
 
 } // namespace lld::macho
 

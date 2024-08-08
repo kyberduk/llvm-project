@@ -10,8 +10,8 @@
 #define LLD_WASM_WRITER_H
 
 namespace lld::wasm {
-
-void writeResult();
+class Ctx;
+void writeResult(Ctx&ctx);
 
 } // namespace lld::wasm
 

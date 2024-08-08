@@ -59,7 +59,7 @@
 //
 // warn() doesn't do anything but printing out a given message.
 //
-// It is not recommended to use llvm::outs() or lld::errs() directly in lld
+// It is not recommended to use llvm::outs() or ctx.errs() directly in lld
 // because they are not thread-safe. The functions declared in this file are
 // thread-safe.
 //
@@ -78,9 +78,10 @@
 namespace llvm {
 class DiagnosticInfo;
 class raw_ostream;
-}
+} // namespace llvm
 
 namespace lld {
+class CommonLinkerContext;
 
 llvm::raw_ostream &outs();
 llvm::raw_ostream &errs();
@@ -89,6 +90,7 @@ enum class ErrorTag { LibNotFound, SymbolNotFound };
 
 class ErrorHandler {
 public:
+  ErrorHandler(CommonLinkerContext *c) : ctx(c) {}
   ~ErrorHandler();
 
   void initialize(llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS,
@@ -127,12 +129,14 @@ private:
   void reportDiagnostic(StringRef location, Colors c, StringRef diagKind,
                         const Twine &msg);
 
+  CommonLinkerContext *ctx;
+
   // We want to separate multi-line messages with a newline. `sep` is "\n"
   // if the last messages was multi-line. Otherwise "".
   llvm::StringRef sep;
 
   // We wrap stdout and stderr so that you can pass alternative stdout/stderr as
-  // arguments to lld::*::link() functions. Since lld::outs() or lld::errs() can
+  // arguments to lld::*::link() functions. Since ctx.outs() or ctx.errs() can
   // be indirectly called from multiple threads, we protect them using a mutex.
   // In the future, we plan on supporting several concurrent linker contexts,
   // which explains why the mutex is not a global but part of this context.
@@ -141,61 +145,17 @@ private:
   llvm::raw_ostream *stderrOS{};
 };
 
-/// Returns the default error handler.
-ErrorHandler &errorHandler();
+[[noreturn]] void exitLld(CommonLinkerContext *ctx, int val);
 
-void error(const Twine &msg);
-void error(const Twine &msg, ErrorTag tag, ArrayRef<StringRef> args);
-[[noreturn]] void fatal(const Twine &msg);
-void log(const Twine &msg);
-void message(const Twine &msg, llvm::raw_ostream &s = outs());
-void warn(const Twine &msg);
-uint64_t errorCount();
-
-[[noreturn]] void exitLld(int val);
-
-void diagnosticHandler(const llvm::DiagnosticInfo &di);
-void checkError(Error e);
-
-// check functions are convenient functions to strip errors
-// from error-or-value objects.
-template <class T> T check(ErrorOr<T> e) {
-  if (auto ec = e.getError())
-    fatal(ec.message());
-  return std::move(*e);
-}
-
-template <class T> T check(Expected<T> e) {
-  if (!e)
-    fatal(llvm::toString(e.takeError()));
-  return std::move(*e);
-}
-
-// Don't move from Expected wrappers around references.
-template <class T> T &check(Expected<T &> e) {
-  if (!e)
-    fatal(llvm::toString(e.takeError()));
-  return *e;
-}
-
-template <class T>
-T check2(ErrorOr<T> e, llvm::function_ref<std::string()> prefix) {
-  if (auto ec = e.getError())
-    fatal(prefix() + ": " + ec.message());
-  return std::move(*e);
-}
-
-template <class T>
-T check2(Expected<T> e, llvm::function_ref<std::string()> prefix) {
-  if (!e)
-    fatal(prefix() + ": " + toString(e.takeError()));
-  return std::move(*e);
-}
+void diagnosticHandler(CommonLinkerContext &ctx,
+                       const llvm::DiagnosticInfo &di);
+void checkError(CommonLinkerContext &ctx, Error e);
 
 inline std::string toString(const Twine &s) { return s.str(); }
 
 // To evaluate the second argument lazily, we use C macro.
-#define CHECK(E, S) check2((E), [&] { return toString(S); })
+#define CHECK(C, E, S) check2((C), (E), [&] { return toString((S)); })
+#define CHECK_CTX(C, E, S) check2((C), (E), [&] { return toString((C), (S)); })
 
 } // namespace lld
 

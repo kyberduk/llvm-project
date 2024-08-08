@@ -40,10 +40,10 @@ class RuntimePseudoReloc;
 class Symbol;
 
 // Mask for permissions (discardable, writable, readable, executable, etc).
-const uint32_t permMask = 0xFE000000;
+constexpr uint32_t permMask = 0xFE000000;
 
 // Mask for section types (code, data, bss).
-const uint32_t typeMask = 0x000000E0;
+constexpr uint32_t typeMask = 0x000000E0;
 
 // The log base 2 of the largest section alignment, which is log2(8192), or 13.
 enum : unsigned { Log2MaxSectionAlignment = 13 };
@@ -79,7 +79,7 @@ public:
   // beginning of the file. Because this function may use RVA values
   // of other chunks for relocations, you need to set them properly
   // before calling this function.
-  void writeTo(uint8_t *buf) const;
+  void writeTo(COFFLinkerContext &ctx, uint8_t *buf) const;
 
   // The writer sets and uses the addresses. In practice, PE images cannot be
   // larger than 2GB. Chunks are always laid as part of the image, so Chunk RVAs
@@ -108,7 +108,7 @@ public:
 
   // Returns a human-readable name of this chunk. Chunks are unnamed chunks of
   // bytes, so this is used only for logging or debugging.
-  StringRef getDebugName() const;
+  StringRef getDebugName(COFFLinkerContext &ctx) const;
 
   // Return true if this file has the hotpatch flag set to true in the
   // S_COMPILE3 record in codeview debug info. Also returns true for some thunks
@@ -233,12 +233,12 @@ public:
   static bool classof(const Chunk *c) { return c->kind() == SectionKind; }
   size_t getSize() const { return header->SizeOfRawData; }
   ArrayRef<uint8_t> getContents() const;
-  void writeTo(uint8_t *buf) const;
+  void writeTo(COFFLinkerContext &ctx, uint8_t *buf) const;
 
   MachineTypes getMachine() const { return file->getMachineType(); }
 
   // Defend against unsorted relocations. This may be overly conservative.
-  void sortRelocations();
+  void sortRelocations(COFFLinkerContext &ctx);
 
   // Write and relocate a portion of the section. This is intended to be called
   // in a loop. Relocations must be sorted first.
@@ -264,27 +264,30 @@ public:
   void applyRelARM64(uint8_t *off, uint16_t type, OutputSection *os, uint64_t s,
                      uint64_t p, uint64_t imageBase) const;
 
-  void getRuntimePseudoRelocs(std::vector<RuntimePseudoReloc> &res);
+  void getRuntimePseudoRelocs(COFFLinkerContext &ctx,
+                              std::vector<RuntimePseudoReloc> &res);
 
   // Called if the garbage collector decides to not include this chunk
   // in a final output. It's supposed to print out a log message to stdout.
-  void printDiscardedMessage() const;
+  void printDiscardedMessage(COFFLinkerContext &ctx) const;
 
   // Adds COMDAT associative sections to this COMDAT section. A chunk
   // and its children are treated as a group by the garbage collector.
   void addAssociative(SectionChunk *child);
 
-  StringRef getDebugName() const;
+  StringRef getDebugName(COFFLinkerContext &ctx) const;
 
   // True if this is a codeview debug info chunk. These will not be laid out in
   // the image. Instead they will end up in the PDB, if one is requested.
   bool isCodeView() const {
-    return getSectionName() == ".debug" || getSectionName().starts_with(".debug$");
+    return getSectionName() == ".debug" ||
+           getSectionName().starts_with(".debug$");
   }
 
   // True if this is a DWARF debug info or exception handling chunk.
   bool isDWARF() const {
-    return getSectionName().starts_with(".debug_") || getSectionName() == ".eh_frame";
+    return getSectionName().starts_with(".debug_") ||
+           getSectionName() == ".eh_frame";
   }
 
   // Allow iteration over the bodies of this chunk's relocated symbols.
@@ -337,9 +340,10 @@ public:
   // The section ID this chunk belongs to in its Obj.
   uint32_t getSectionNumber() const;
 
-  ArrayRef<uint8_t> consumeDebugMagic();
+  ArrayRef<uint8_t> consumeDebugMagic(COFFLinkerContext &ctx);
 
-  static ArrayRef<uint8_t> consumeDebugMagic(ArrayRef<uint8_t> data,
+  static ArrayRef<uint8_t> consumeDebugMagic(COFFLinkerContext &ctx,
+                                             ArrayRef<uint8_t> data,
                                              StringRef sectionName);
 
   static SectionChunk *findByName(ArrayRef<SectionChunk *> sections,
@@ -405,9 +409,9 @@ inline uint32_t Chunk::getOutputCharacteristics() const {
   return static_cast<const NonSectionChunk *>(this)->getOutputCharacteristics();
 }
 
-inline void Chunk::writeTo(uint8_t *buf) const {
+inline void Chunk::writeTo(COFFLinkerContext &ctx, uint8_t *buf) const {
   if (isa<SectionChunk>(this))
-    static_cast<const SectionChunk *>(this)->writeTo(buf);
+    static_cast<const SectionChunk *>(this)->writeTo(ctx, buf);
   else
     static_cast<const NonSectionChunk *>(this)->writeTo(buf);
 }
@@ -425,9 +429,9 @@ inline void Chunk::getBaserels(std::vector<Baserel> *res) {
     static_cast<NonSectionChunk *>(this)->getBaserels(res);
 }
 
-inline StringRef Chunk::getDebugName() const {
+inline StringRef Chunk::getDebugName(COFFLinkerContext &ctx) const {
   if (isa<SectionChunk>(this))
-    return static_cast<const SectionChunk *>(this)->getDebugName();
+    return static_cast<const SectionChunk *>(this)->getDebugName(ctx);
   return static_cast<const NonSectionChunk *>(this)->getDebugName();
 }
 
@@ -503,17 +507,17 @@ private:
   StringRef str;
 };
 
-static const uint8_t importThunkX86[] = {
+static constexpr uint8_t importThunkX86[] = {
     0xff, 0x25, 0x00, 0x00, 0x00, 0x00, // JMP *0x0
 };
 
-static const uint8_t importThunkARM[] = {
+static constexpr uint8_t importThunkARM[] = {
     0x40, 0xf2, 0x00, 0x0c, // mov.w ip, #0
     0xc0, 0xf2, 0x00, 0x0c, // mov.t ip, #0
     0xdc, 0xf8, 0x00, 0xf0, // ldr.w pc, [ip]
 };
 
-static const uint8_t importThunkARM64[] = {
+static constexpr uint8_t importThunkARM64[] = {
     0x10, 0x00, 0x00, 0x90, // adrp x16, #0
     0x10, 0x02, 0x40, 0xf9, // ldr  x16, [x16]
     0x00, 0x02, 0x1f, 0xd6, // br   x16
@@ -769,12 +773,12 @@ inline bool Chunk::isHotPatchable() const {
   return false;
 }
 
-void applyMOV32T(uint8_t *off, uint32_t v);
-void applyBranch24T(uint8_t *off, int32_t v);
+void applyMOV32T(COFFLinkerContext &ctx, uint8_t *off, uint32_t v);
+void applyBranch24T(COFFLinkerContext &ctx, uint8_t *off, int32_t v);
 
 void applyArm64Addr(uint8_t *off, uint64_t s, uint64_t p, int shift);
 void applyArm64Imm(uint8_t *off, uint64_t imm, uint32_t rangeLimit);
-void applyArm64Branch26(uint8_t *off, int64_t v);
+void applyArm64Branch26(COFFLinkerContext &ctx, uint8_t *off, int64_t v);
 
 // Convenience class for initializing a coff_section with specific flags.
 class FakeSection {
@@ -803,6 +807,6 @@ namespace llvm {
 template <>
 struct DenseMapInfo<lld::coff::ChunkAndOffset>
     : lld::coff::ChunkAndOffset::DenseMapInfo {};
-}
+} // namespace llvm
 
 #endif

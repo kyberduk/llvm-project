@@ -46,7 +46,7 @@ static void writeHeader(raw_ostream &os, uint64_t addr, uint64_t size,
 }
 
 // Returns a list of all symbols that we want to print out.
-static std::vector<DefinedRegular *> getSymbols(const COFFLinkerContext &ctx) {
+static std::vector<DefinedRegular *> getSymbols(COFFLinkerContext &ctx) {
   std::vector<DefinedRegular *> v;
   for (ObjFile *file : ctx.objFileInstances)
     for (Symbol *b : file->getSymbols())
@@ -74,7 +74,7 @@ static SymbolMapTy getSectionSyms(ArrayRef<DefinedRegular *> syms) {
 
 // Construct a map from symbols to their stringified representations.
 static DenseMap<DefinedRegular *, std::string>
-getSymbolStrings(const COFFLinkerContext &ctx,
+getSymbolStrings(COFFLinkerContext &ctx,
                  ArrayRef<DefinedRegular *> syms) {
   std::vector<std::string> str(syms.size());
   parallelFor((size_t)0, syms.size(), [&](size_t i) {
@@ -89,7 +89,7 @@ getSymbolStrings(const COFFLinkerContext &ctx,
   return ret;
 }
 
-void lld::coff::writeLLDMapFile(const COFFLinkerContext &ctx) {
+void lld::coff::writeLLDMapFile(COFFLinkerContext &ctx) {
   if (ctx.config.lldmapFile.empty())
     return;
 
@@ -97,7 +97,7 @@ void lld::coff::writeLLDMapFile(const COFFLinkerContext &ctx) {
   std::error_code ec;
   raw_fd_ostream os(ctx.config.lldmapFile, ec, sys::fs::OF_None);
   if (ec)
-    fatal("cannot open " + ctx.config.lldmapFile + ": " + ec.message());
+    ctx.fatal("cannot open " + ctx.config.lldmapFile + ": " + ec.message());
 
   // Collect symbol info that we want to print out.
   std::vector<DefinedRegular *> syms = getSymbols(ctx);

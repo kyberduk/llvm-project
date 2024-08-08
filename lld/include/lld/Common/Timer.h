@@ -19,7 +19,7 @@
 #include <vector>
 
 namespace lld {
-
+class CommonLinkerContext;
 class Timer;
 
 struct ScopedTimer {
@@ -42,12 +42,13 @@ public:
   explicit Timer(llvm::StringRef name);
 
   void addToTotal(std::chrono::nanoseconds time) { total += time.count(); }
-  void print();
+  void print(CommonLinkerContext &ctx);
 
   double millis() const;
 
 private:
-  void print(int depth, double totalDuration, bool recurse = true) const;
+  void print(CommonLinkerContext &ctx, int depth, double totalDuration,
+             bool recurse = true) const;
 
   std::atomic<std::chrono::nanoseconds::rep> total;
   std::vector<Timer *> children;

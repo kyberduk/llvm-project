@@ -20,6 +20,7 @@
 
 #include "MarkLive.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputChunks.h"
 #include "InputElement.h"
 #include "SymbolTable.h"
@@ -35,7 +36,7 @@ namespace lld::wasm {
 namespace {
 
 class MarkLive {
-public:
+public:MarkLive(Ctx&c):ctx(c){}
   void run();
 
 private:
@@ -43,7 +44,7 @@ private:
   void enqueueInitFunctions(const ObjFile *sym);
   void mark();
   bool isCallCtorsLive();
-
+Ctx&ctx;
   // A list of chunks to visit.
   SmallVector<InputChunk *, 256> queue;
 };
@@ -85,16 +86,16 @@ void MarkLive::enqueueInitFunctions(const ObjFile *obj) {
 
 void MarkLive::run() {
   // Add GC root symbols.
-  if (!config->entry.empty())
-    enqueue(symtab->find(config->entry));
+  if (!ctx.config->entry.empty())
+    enqueue(ctx.symtab->find(ctx.config->entry));
 
   // We need to preserve any no-strip or exported symbol
-  for (Symbol *sym : symtab->symbols())
+  for (Symbol *sym : ctx.symtab->symbols())
     if (sym->isNoStrip() || sym->isExported())
       enqueue(sym);
 
-  if (WasmSym::callDtors)
-    enqueue(WasmSym::callDtors);
+  if (ctx.ws.callDtors)
+    enqueue(ctx.ws.callDtors);
 
   // Enqueue constructors in objects explicitly live from the command-line.
   for (const ObjFile *obj : ctx.objectFiles)
@@ -106,7 +107,7 @@ void MarkLive::run() {
   // If we have any non-discarded init functions, mark `__wasm_call_ctors` as
   // live so that we assign it an index and call it.
   if (isCallCtorsLive())
-    WasmSym::callCtors->markLive();
+    ctx.ws.callCtors->markLive();
 }
 
 void MarkLive::mark() {
@@ -140,49 +141,49 @@ void MarkLive::mark() {
   }
 }
 
-void markLive() {
-  if (!config->gcSections)
+void markLive(Ctx&ctx) {
+  if (!ctx.config->gcSections)
     return;
 
   LLVM_DEBUG(dbgs() << "markLive\n");
 
-  MarkLive marker;
+  MarkLive marker(ctx);
   marker.run();
 
   // Report garbage-collected sections.
-  if (config->printGcSections) {
+  if (ctx.config->printGcSections) {
     for (const ObjFile *obj : ctx.objectFiles) {
       for (InputChunk *c : obj->functions)
         if (!c->live)
-          message("removing unused section " + toString(c));
+          ctx.message("removing unused section " + toString(c));
       for (InputChunk *c : obj->segments)
         if (!c->live)
-          message("removing unused section " + toString(c));
+          ctx.message("removing unused section " + toString(c));
       for (InputGlobal *g : obj->globals)
         if (!g->live)
-          message("removing unused section " + toString(g));
+          ctx.message("removing unused section " + toString(g));
       for (InputTag *t : obj->tags)
         if (!t->live)
-          message("removing unused section " + toString(t));
+          ctx.message("removing unused section " + toString(t));
       for (InputTable *t : obj->tables)
         if (!t->live)
-          message("removing unused section " + toString(t));
+          ctx.message("removing unused section " + toString(t));
     }
     for (InputChunk *c : ctx.syntheticFunctions)
       if (!c->live)
-        message("removing unused section " + toString(c));
+        ctx.message("removing unused section " + toString(c));
     for (InputGlobal *g : ctx.syntheticGlobals)
       if (!g->live)
-        message("removing unused section " + toString(g));
+        ctx.message("removing unused section " + toString(g));
     for (InputTable *t : ctx.syntheticTables)
       if (!t->live)
-        message("removing unused section " + toString(t));
+        ctx.message("removing unused section " + toString(t));
   }
 }
 
 bool MarkLive::isCallCtorsLive() {
   // In a reloctable link, we don't call `__wasm_call_ctors`.
-  if (config->relocatable)
+  if (ctx.config->relocatable)
     return false;
 
   // In Emscripten-style PIC, we call `__wasm_call_ctors` which calls

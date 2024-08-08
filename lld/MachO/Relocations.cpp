@@ -8,6 +8,7 @@
 
 #include "Relocations.h"
 #include "ConcatOutputSection.h"
+#include "Ctx.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
 #include "Target.h"
@@ -31,9 +32,9 @@ InputSection *Reloc::getReferentInputSection() const {
   }
 }
 
-bool macho::validateSymbolRelocation(const Symbol *sym,
+bool macho::validateSymbolRelocation(Ctx&ctx,const Symbol *sym,
                                      const InputSection *isec, const Reloc &r) {
-  const RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
+  const RelocAttrs &relocAttrs = ctx.target->getRelocAttrs(r.type);
   bool valid = true;
   auto message = [&](const Twine &diagnostic) {
     valid = false;
@@ -43,7 +44,7 @@ bool macho::validateSymbolRelocation(const Symbol *sym,
   };
 
   if (relocAttrs.hasAttr(RelocAttrBits::TLV) != sym->isTlv())
-    error(message(Twine("requires that symbol ") + sym->getName() + " " +
+    ctx.error(message(Twine("requires that symbol ") + sym->getName() + " " +
                   (sym->isTlv() ? "not " : "") + "be thread-local"));
 
   return valid;
@@ -62,8 +63,8 @@ bool macho::validateSymbolRelocation(const Symbol *sym,
 // This is implemented as a slow linear search through OutputSegments,
 // OutputSections, and finally the InputSections themselves. However, this
 // function should be called only on error paths, so some overhead is fine.
-InputSection *macho::offsetToInputSection(uint64_t *off) {
-  for (OutputSegment *seg : outputSegments) {
+InputSection *macho::offsetToInputSection(Ctx&ctx,uint64_t *off) {
+  for (OutputSegment *seg : ctx.outputSegments) {
     if (*off < seg->fileOff || *off >= seg->fileOff + seg->fileSize)
       continue;
 
@@ -92,27 +93,25 @@ InputSection *macho::offsetToInputSection(uint64_t *off) {
   return nullptr;
 }
 
-void macho::reportRangeError(void *loc, const Reloc &r, const Twine &v,
+void macho::reportRangeError(Ctx&ctx,void *loc, const Reloc &r, const Twine &v,
                              uint8_t bits, int64_t min, uint64_t max) {
   std::string hint;
-  uint64_t off = reinterpret_cast<const uint8_t *>(loc) - in.bufferStart;
-  const InputSection *isec = offsetToInputSection(&off);
+  uint64_t off = reinterpret_cast<const uint8_t *>(loc) - ctx.in.bufferStart;
+  const InputSection *isec = offsetToInputSection(ctx,&off);
   std::string locStr = isec ? isec->getLocation(off) : "(invalid location)";
   if (auto *sym = r.referent.dyn_cast<Symbol *>())
     hint = "; references " + toString(*sym);
-  error(locStr + ": relocation " + target->getRelocAttrs(r.type).name +
+  ctx.error(locStr + ": relocation " + ctx.target->getRelocAttrs(r.type).name +
         " is out of range: " + v + " is not in [" + Twine(min) + ", " +
         Twine(max) + "]" + hint);
 }
 
-void macho::reportRangeError(void *loc, SymbolDiagnostic d, const Twine &v,
+void macho::reportRangeError(Ctx&ctx,void *loc, SymbolDiagnostic d, const Twine &v,
                              uint8_t bits, int64_t min, uint64_t max) {
   // FIXME: should we use `loc` somehow to provide a better error message?
   std::string hint;
   if (d.symbol)
     hint = "; references " + toString(*d.symbol);
-  error(d.reason + " is out of range: " + v + " is not in [" + Twine(min) +
+  ctx.error(d.reason + " is out of range: " + v + " is not in [" + Twine(min) +
         ", " + Twine(max) + "]" + hint);
 }
-
-const RelocAttrs macho::invalidRelocAttrs{"INVALID", RelocAttrBits::_0};

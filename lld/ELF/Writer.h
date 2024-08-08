@@ -16,17 +16,16 @@
 namespace lld::elf {
 class InputFile;
 class OutputSection;
-void copySectionsIntoPartitions();
-template <class ELFT> void createSyntheticSections();
-template <class ELFT> void writeResult();
+void copySectionsIntoPartitions(Ctx &ctx);
+template <class ELFT> void createSyntheticSections(Ctx &ctx);
+template <class ELFT> void writeResult(Ctx &ctx);
 
 // This describes a program header entry.
 // Each contains type, access flags and range of output sections that will be
 // placed in it.
 struct PhdrEntry {
-  PhdrEntry(unsigned type, unsigned flags)
-      : p_align(type == llvm::ELF::PT_LOAD ? config->maxPageSize : 0),
-        p_type(type), p_flags(flags) {}
+  PhdrEntry(Ctx &ctx, unsigned type, unsigned flags);
+
   void add(OutputSection *sec);
 
   uint64_t p_paddr = 0;
@@ -45,20 +44,20 @@ struct PhdrEntry {
   uint64_t lmaOffset = 0;
 };
 
-void addReservedSymbols();
-bool includeInSymtab(const Symbol &b);
+void addReservedSymbols(Ctx &ctx);
+bool includeInSymtab(Ctx &ctx, const Symbol &b);
 
-template <class ELFT> uint32_t calcMipsEFlags();
+template <class ELFT> uint32_t calcMipsEFlags(Ctx &ctx);
 
-uint8_t getMipsFpAbiFlag(uint8_t oldFlag, uint8_t newFlag,
+uint8_t getMipsFpAbiFlag(Ctx &ctx, uint8_t oldFlag, uint8_t newFlag,
                          llvm::StringRef fileName);
 
-bool isMipsN32Abi(const InputFile *f);
-bool isMicroMips();
-bool isMipsR6();
+bool isMipsN32Abi(Ctx &ctx, const InputFile *f);
+bool isMicroMips(Ctx &ctx);
+bool isMipsR6(Ctx &ctx);
 
-bool hasMemtag();
-bool canHaveMemtagGlobals();
+bool hasMemtag(Ctx &ctx);
+bool canHaveMemtagGlobals(Ctx &ctx);
 } // namespace lld::elf
 
 #endif

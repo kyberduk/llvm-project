@@ -8,17 +8,18 @@
 
 #include "lld/Common/DWARF.h"
 #include "lld/Common/ErrorHandler.h"
+#include "lld/Common/CommonLinkerContext.h"
 
 using namespace llvm;
 
 namespace lld {
 
-DWARFCache::DWARFCache(std::unique_ptr<llvm::DWARFContext> d)
+DWARFCache::DWARFCache(CommonLinkerContext &ctx, std::unique_ptr<llvm::DWARFContext> d)
     : dwarf(std::move(d)) {
   for (std::unique_ptr<DWARFUnit> &cu : dwarf->compile_units()) {
-    auto report = [](Error err) {
+    auto report = [&ctx](Error err) {
       handleAllErrors(std::move(err),
-                      [](ErrorInfoBase &info) { warn(info.message()); });
+                      [&ctx](ErrorInfoBase &info) { ctx.warn(info.message()); });
     };
     Expected<const DWARFDebugLine::LineTable *> expectedLT =
         dwarf->getLineTableForUnit(cu.get(), report);

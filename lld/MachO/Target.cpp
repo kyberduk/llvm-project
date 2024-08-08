@@ -7,8 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "Target.h"
+#include "Ctx.h"
 
 using namespace lld;
 using namespace lld::macho;
 
-TargetInfo *macho::target = nullptr;
+const RelocAttrs &TargetInfo::getRelocAttrs(uint8_t type) const {
+  assert(type < relocAttrs.size() && "invalid relocation type");
+  if (type >= relocAttrs.size())
+    return ctx.invalidRelocAttrs;
+  return relocAttrs[type];
+}

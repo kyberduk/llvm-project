@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DWARF.h"
+#include "Ctx.h"
 #include "InputSection.h"
 #include "Symbols.h"
 #include "lld/Common/Memory.h"
@@ -25,7 +26,8 @@ using namespace llvm::object;
 using namespace lld;
 using namespace lld::elf;
 
-template <class ELFT> LLDDwarfObj<ELFT>::LLDDwarfObj(ObjFile<ELFT> *obj) {
+template <class ELFT>
+LLDDwarfObj<ELFT>::LLDDwarfObj(Ctx &c, ObjFile<ELFT> *obj) : ctx(c) {
   // Get the ELF sections to retrieve sh_flags. See the SHF_GROUP comment below.
   ArrayRef<typename ELFT::Shdr> objSections = obj->template getELFShdrs<ELFT>();
   assert(objSections.size() == obj->getSections().size());
@@ -44,17 +46,17 @@ template <class ELFT> LLDDwarfObj<ELFT>::LLDDwarfObj(ObjFile<ELFT> *obj) {
                 .Case(".debug_str_offsets", &strOffsetsSection)
                 .Case(".debug_line", &lineSection)
                 .Default(nullptr)) {
-      m->Data = toStringRef(sec->contentMaybeDecompress());
+      m->Data = toStringRef(sec->contentMaybeDecompress(ctx));
       m->sec = sec;
       continue;
     }
 
     if (sec->name == ".debug_abbrev")
-      abbrevSection = toStringRef(sec->contentMaybeDecompress());
+      abbrevSection = toStringRef(sec->contentMaybeDecompress(ctx));
     else if (sec->name == ".debug_str")
-      strSection = toStringRef(sec->contentMaybeDecompress());
+      strSection = toStringRef(sec->contentMaybeDecompress(ctx));
     else if (sec->name == ".debug_line_str")
-      lineStrSection = toStringRef(sec->contentMaybeDecompress());
+      lineStrSection = toStringRef(sec->contentMaybeDecompress(ctx));
     else if (sec->name == ".debug_info" &&
              !(objSections[i].sh_flags & ELF::SHF_GROUP)) {
       // In DWARF v5, -fdebug-types-section places type units in .debug_info
@@ -66,7 +68,7 @@ template <class ELFT> LLDDwarfObj<ELFT>::LLDDwarfObj(ObjFile<ELFT> *obj) {
       // need to perform a lightweight parsing. We drop the SHF_GROUP flag when
       // the InputSection was created, so we need to retrieve sh_flags from the
       // associated ELF section header.
-      infoSection.Data = toStringRef(sec->contentMaybeDecompress());
+      infoSection.Data = toStringRef(sec->contentMaybeDecompress(ctx));
       infoSection.sec = sec;
     }
   }
@@ -111,15 +113,15 @@ LLDDwarfObj<ELFT>::findAux(const InputSectionBase &sec, uint64_t pos,
   const RelTy &rel = *it;
 
   const ObjFile<ELFT> *file = sec.getFile<ELFT>();
-  uint32_t symIndex = rel.getSymbol(config->isMips64EL);
+  uint32_t symIndex = rel.getSymbol(ctx.config->isMips64EL);
   const typename ELFT::Sym &sym = file->template getELFSyms<ELFT>()[symIndex];
-  uint32_t secIndex = file->getSectionIndex(sym);
+  uint32_t secIndex = file->getSectionIndex(ctx, sym);
 
   // An undefined symbol may be a symbol defined in a discarded section. We
   // shall still resolve it. This is important for --gdb-index: the end address
   // offset of an entry in .debug_ranges is relocated. If it is not resolved,
   // its zero value will terminate the decoding of .debug_ranges prematurely.
-  Symbol &s = file->getRelocTargetSym(rel);
+  Symbol &s = file->getRelocTargetSym(ctx, rel);
   uint64_t val = 0;
   if (auto *dr = dyn_cast<Defined>(&s))
     val = dr->value;

@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Arch/ARM64Common.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
@@ -28,7 +29,7 @@ using namespace lld::macho;
 namespace {
 
 struct ARM64_32 : ARM64Common {
-  ARM64_32();
+  ARM64_32(Ctx &ctx);
   void writeStub(uint8_t *buf, const Symbol &, uint64_t) const override;
   void writeStubHelperHeader(uint8_t *buf) const override;
   void writeStubHelperEntry(uint8_t *buf, const Symbol &,
@@ -72,7 +73,7 @@ static constexpr uint32_t stubCode[] = {
 
 void ARM64_32::writeStub(uint8_t *buf8, const Symbol &sym,
                          uint64_t pointerVA) const {
-  ::writeStub(buf8, stubCode, sym, pointerVA);
+  ::writeStub(ctx,buf8, stubCode, sym, pointerVA);
 }
 
 static constexpr uint32_t stubHelperHeaderCode[] = {
@@ -85,7 +86,7 @@ static constexpr uint32_t stubHelperHeaderCode[] = {
 };
 
 void ARM64_32::writeStubHelperHeader(uint8_t *buf8) const {
-  ::writeStubHelperHeader<ILP32>(buf8, stubHelperHeaderCode);
+  ::writeStubHelperHeader<ILP32>(ctx,buf8, stubHelperHeaderCode);
 }
 
 static constexpr uint32_t stubHelperEntryCode[] = {
@@ -96,17 +97,17 @@ static constexpr uint32_t stubHelperEntryCode[] = {
 
 void ARM64_32::writeStubHelperEntry(uint8_t *buf8, const Symbol &sym,
                                     uint64_t entryVA) const {
-  ::writeStubHelperEntry(buf8, stubHelperEntryCode, sym, entryVA);
+  ::writeStubHelperEntry(ctx,buf8, stubHelperEntryCode, sym, entryVA);
 }
 
 void ARM64_32::writeObjCMsgSendStub(uint8_t *buf, Symbol *sym,
                                     uint64_t stubsAddr, uint64_t &stubOffset,
                                     uint64_t selrefsVA, uint64_t selectorIndex,
                                     Symbol *objcMsgSend) const {
-  fatal("TODO: implement this");
+  ctx.fatal("TODO: implement this");
 }
 
-ARM64_32::ARM64_32() : ARM64Common(ILP32()) {
+ARM64_32::ARM64_32(Ctx&ctx) : ARM64Common(ctx, ILP32()) {
   cpuType = CPU_TYPE_ARM64_32;
   cpuSubtype = CPU_SUBTYPE_ARM64_V8;
 
@@ -121,7 +122,4 @@ ARM64_32::ARM64_32() : ARM64Common(ILP32()) {
   relocAttrs = {relocAttrsArray.data(), relocAttrsArray.size()};
 }
 
-TargetInfo *macho::createARM64_32TargetInfo() {
-  static ARM64_32 t;
-  return &t;
-}
+TargetInfo *macho::createARM64_32TargetInfo(Ctx&ctx) { return new ARM64_32(ctx); }

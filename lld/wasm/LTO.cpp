@@ -8,6 +8,7 @@
 
 #include "LTO.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "Symbols.h"
 #include "lld/Common/Args.h"
@@ -38,7 +39,7 @@
 using namespace llvm;
 
 namespace lld::wasm {
-static std::unique_ptr<lto::LTO> createLTO() {
+static std::unique_ptr<lto::LTO> createLTO(Ctx&ctx) {
   lto::Config c;
   c.Options = initTargetOptionsFromCodeGenFlags();
 
@@ -46,40 +47,40 @@ static std::unique_ptr<lto::LTO> createLTO() {
   c.Options.FunctionSections = true;
   c.Options.DataSections = true;
 
-  c.DisableVerify = config->disableVerify;
-  c.DiagHandler = diagnosticHandler;
-  c.OptLevel = config->ltoo;
+  c.DisableVerify = ctx.config->disableVerify;
+  c.DiagHandler = [&ctx](const DiagnosticInfo &di){diagnosticHandler(ctx,di);};
+  c.OptLevel = ctx.config->ltoo;
   c.MAttrs = getMAttrs();
-  c.CGOptLevel = config->ltoCgo;
-  c.DebugPassManager = config->ltoDebugPassManager;
+  c.CGOptLevel = ctx.config->ltoCgo;
+  c.DebugPassManager = ctx.config->ltoDebugPassManager;
 
-  if (config->relocatable)
+  if (ctx.config->relocatable)
     c.RelocModel = std::nullopt;
   else if (ctx.isPic)
     c.RelocModel = Reloc::PIC_;
   else
     c.RelocModel = Reloc::Static;
 
-  if (config->saveTemps)
-    checkError(c.addSaveTemps(config->outputFile.str() + ".",
+  if (ctx.config->saveTemps)
+    checkError(ctx,c.addSaveTemps(ctx.config->outputFile.str() + ".",
                               /*UseInputModulePath*/ true));
   lto::ThinBackend backend = lto::createInProcessThinBackend(
-      llvm::heavyweight_hardware_concurrency(config->thinLTOJobs));
+      llvm::heavyweight_hardware_concurrency(ctx.config->thinLTOJobs));
   return std::make_unique<lto::LTO>(std::move(c), backend,
-                                     config->ltoPartitions);
+                                     ctx.config->ltoPartitions);
 }
 
-BitcodeCompiler::BitcodeCompiler() : ltoObj(createLTO()) {}
+BitcodeCompiler::BitcodeCompiler(Ctx&c) : ctx(c),ltoObj(createLTO(ctx)) {}
 
 BitcodeCompiler::~BitcodeCompiler() = default;
 
-static void undefine(Symbol *s) {
+static void undefine(Ctx&ctx,Symbol *s) {
   if (auto f = dyn_cast<DefinedFunction>(s))
-    replaceSymbol<UndefinedFunction>(f, f->getName(), std::nullopt,
+    replaceSymbol<UndefinedFunction>(ctx,f, ctx,f->getName(), std::nullopt,
                                      std::nullopt, 0, f->getFile(),
                                      f->signature);
   else if (isa<DefinedData>(s))
-    replaceSymbol<UndefinedData>(s, s->getName(), 0, s->getFile());
+    replaceSymbol<UndefinedData>(ctx,s, ctx,s->getName(), 0, s->getFile());
   else
     llvm_unreachable("unexpected symbol kind");
 }
@@ -102,18 +103,18 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     // Once IRObjectFile is fixed to report only one symbol this hack can
     // be removed.
     r.Prevailing = !objSym.isUndefined() && sym->getFile() == &f;
-    r.VisibleToRegularObj = config->relocatable || sym->isUsedInRegularObj ||
+    r.VisibleToRegularObj = ctx.config->relocatable || sym->isUsedInRegularObj ||
                             sym->isNoStrip() ||
                             (r.Prevailing && sym->isExported());
     if (r.Prevailing)
-      undefine(sym);
+      undefine(ctx,sym);
 
     // We tell LTO to not apply interprocedural optimization for wrapped
     // (with --wrap) symbols because otherwise LTO would inline them while
     // their values are still not final.
     r.LinkerRedefined = !sym->canInline;
   }
-  checkError(ltoObj->add(std::move(f.obj), resols));
+  checkError(ctx,ltoObj->add(std::move(f.obj), resols));
 }
 
 // Merge all the bitcode files we have seen, codegen the result
@@ -127,32 +128,32 @@ std::vector<StringRef> BitcodeCompiler::compile() {
   // to cache native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
-  if (!config->thinLTOCacheDir.empty())
-    cache = check(localCache("ThinLTO", "Thin", config->thinLTOCacheDir,
+  if (!ctx.config->thinLTOCacheDir.empty())
+    cache = check(ctx,localCache("ThinLTO", "Thin", ctx.config->thinLTOCacheDir,
                              [&](size_t task, const Twine &moduleName,
                                  std::unique_ptr<MemoryBuffer> mb) {
                                files[task] = std::move(mb);
                              }));
 
-  checkError(ltoObj->run(
+  checkError(ctx,ltoObj->run(
       [&](size_t task, const Twine &moduleName) {
         return std::make_unique<CachedFileStream>(
             std::make_unique<raw_svector_ostream>(buf[task]));
       },
       cache));
 
-  if (!config->thinLTOCacheDir.empty())
-    pruneCache(config->thinLTOCacheDir, config->thinLTOCachePolicy, files);
+  if (!ctx.config->thinLTOCacheDir.empty())
+    pruneCache(ctx.config->thinLTOCacheDir, ctx.config->thinLTOCachePolicy, files);
 
   std::vector<StringRef> ret;
   for (unsigned i = 0; i != maxTasks; ++i) {
     if (buf[i].empty())
       continue;
-    if (config->saveTemps) {
+    if (ctx.config->saveTemps) {
       if (i == 0)
-        saveBuffer(buf[i], config->outputFile + ".lto.o");
+        saveBuffer(ctx,buf[i], ctx.config->outputFile + ".lto.o");
       else
-        saveBuffer(buf[i], config->outputFile + Twine(i) + ".lto.o");
+        saveBuffer(ctx,buf[i], ctx.config->outputFile + Twine(i) + ".lto.o");
     }
     ret.emplace_back(buf[i].data(), buf[i].size());
   }

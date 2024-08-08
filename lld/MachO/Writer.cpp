@@ -9,6 +9,7 @@
 #include "Writer.h"
 #include "ConcatOutputSection.h"
 #include "Config.h"
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "InputSection.h"
 #include "MapFile.h"
@@ -45,7 +46,7 @@ class LCUuid;
 
 class Writer {
 public:
-  Writer() : buffer(errorHandler().outputBuffer) {}
+  Writer(Ctx&c) : ctx(c),buffer(ctx.e.outputBuffer) {}
 
   void treatSpecialUndefineds();
   void scanRelocations();
@@ -66,6 +67,7 @@ public:
 
   template <class LP> void run();
 
+Ctx&ctx;
   ThreadPool threadPool;
   std::unique_ptr<FileOutputBuffer> &buffer;
   uint64_t addr = 0;
@@ -130,11 +132,11 @@ public:
 
 class LCSubFramework final : public LoadCommand {
 public:
-  LCSubFramework(StringRef umbrella) : umbrella(umbrella) {}
+  LCSubFramework(Ctx&c,StringRef umbrella) :ctx(c), umbrella(umbrella) {}
 
   uint32_t getSize() const override {
     return alignToPowerOf2(sizeof(sub_framework_command) + umbrella.size() + 1,
-                           target->wordSize);
+                           ctx.target->wordSize);
   }
 
   void writeTo(uint8_t *buf) const override {
@@ -150,6 +152,7 @@ public:
   }
 
 private:
+Ctx&ctx;
   const StringRef umbrella;
 };
 
@@ -273,7 +276,7 @@ private:
   OutputSegment *seg;
 };
 
-class LCMain final : public LoadCommand {
+class LCMain final : public LoadCommand {public:LCMain(Ctx&c):ctx(c){}
   uint32_t getSize() const override {
     return sizeof(structs::entry_point_command);
   }
@@ -283,14 +286,15 @@ class LCMain final : public LoadCommand {
     c->cmd = LC_MAIN;
     c->cmdsize = getSize();
 
-    if (config->entry->isInStubs())
+    if (ctx.config->entry->isInStubs())
       c->entryoff =
-          in.stubs->fileOff + config->entry->stubsIndex * target->stubSize;
+          ctx.in.stubs->fileOff + ctx.config->entry->stubsIndex * ctx.target->stubSize;
     else
-      c->entryoff = config->entry->getVA() - in.header->addr;
+      c->entryoff = ctx.config->entry->getVA() - ctx.in.header->addr;
 
     c->stacksize = 0;
   }
+  Ctx&ctx;
 };
 
 class LCSymtab final : public LoadCommand {
@@ -320,16 +324,16 @@ public:
 //   * LC_REEXPORT_DYLIB
 class LCDylib final : public LoadCommand {
 public:
-  LCDylib(LoadCommandType type, StringRef path,
+  LCDylib(Ctx&c,LoadCommandType type, StringRef path,
           uint32_t compatibilityVersion = 0, uint32_t currentVersion = 0)
-      : type(type), path(path), compatibilityVersion(compatibilityVersion),
+      : ctx(c),type(type), path(path), compatibilityVersion(compatibilityVersion),
         currentVersion(currentVersion) {
-    instanceCount++;
+    ctx.instanceCount++;
   }
 
   uint32_t getSize() const override {
     return alignToPowerOf2(sizeof(dylib_command) + path.size() + 1,
-                           target->wordSize);
+                           ctx.target->wordSize);
   }
 
   void writeTo(uint8_t *buf) const override {
@@ -347,24 +351,19 @@ public:
     buf[path.size()] = '\0';
   }
 
-  static uint32_t getInstanceCount() { return instanceCount; }
-  static void resetInstanceCount() { instanceCount = 0; }
-
 private:
+Ctx&ctx;
   LoadCommandType type;
   StringRef path;
   uint32_t compatibilityVersion;
   uint32_t currentVersion;
-  static uint32_t instanceCount;
 };
 
-uint32_t LCDylib::instanceCount = 0;
-
 class LCLoadDylinker final : public LoadCommand {
-public:
+public:LCLoadDylinker(Ctx&c):ctx(c){}
   uint32_t getSize() const override {
     return alignToPowerOf2(sizeof(dylinker_command) + path.size() + 1,
-                           target->wordSize);
+                           ctx.target->wordSize);
   }
 
   void writeTo(uint8_t *buf) const override {
@@ -380,6 +379,7 @@ public:
   }
 
 private:
+Ctx&ctx;
   // Recent versions of Darwin won't run any binary that has dyld at a
   // different location.
   const StringRef path = "/usr/lib/dyld";
@@ -387,11 +387,11 @@ private:
 
 class LCRPath final : public LoadCommand {
 public:
-  explicit LCRPath(StringRef path) : path(path) {}
+  explicit LCRPath(Ctx&c,StringRef path) : ctx(c),path(path) {}
 
   uint32_t getSize() const override {
     return alignToPowerOf2(sizeof(rpath_command) + path.size() + 1,
-                           target->wordSize);
+                           ctx.target->wordSize);
   }
 
   void writeTo(uint8_t *buf) const override {
@@ -407,16 +407,17 @@ public:
   }
 
 private:
+Ctx&ctx;
   StringRef path;
 };
 
 class LCDyldEnv final : public LoadCommand {
 public:
-  explicit LCDyldEnv(StringRef name) : name(name) {}
+  explicit LCDyldEnv(Ctx&c,StringRef name) : ctx(c),name(name) {}
 
   uint32_t getSize() const override {
     return alignToPowerOf2(sizeof(dyld_env_command) + name.size() + 1,
-                           target->wordSize);
+                           ctx.target->wordSize);
   }
 
   void writeTo(uint8_t *buf) const override {
@@ -432,6 +433,7 @@ public:
   }
 
 private:
+Ctx&ctx;
   StringRef name;
 };
 
@@ -544,7 +546,7 @@ public:
 };
 
 template <class LP> class LCEncryptionInfo final : public LoadCommand {
-public:
+public:LCEncryptionInfo(Ctx&c):ctx(c){}
   uint32_t getSize() const override {
     return sizeof(typename LP::encryption_info_command);
   }
@@ -555,13 +557,14 @@ public:
     buf += sizeof(EncryptionInfo);
     c->cmd = LP::encryptionInfoLCType;
     c->cmdsize = getSize();
-    c->cryptoff = in.header->getSize();
-    auto it = find_if(outputSegments, [](const OutputSegment *seg) {
+    c->cryptoff = ctx.in.header->getSize();
+    auto it = find_if(ctx.outputSegments, [](const OutputSegment *seg) {
       return seg->name == segment_names::text;
     });
-    assert(it != outputSegments.end());
+    assert(it != ctx.outputSegments.end());
     c->cryptsize = (*it)->fileSize - c->cryptoff;
   }
+  Ctx&ctx;
 };
 
 class LCCodeSignature final : public LoadCommand {
@@ -618,46 +621,46 @@ public:
 } // namespace
 
 void Writer::treatSpecialUndefineds() {
-  if (config->entry)
-    if (auto *undefined = dyn_cast<Undefined>(config->entry))
-      treatUndefinedSymbol(*undefined, "the entry point");
+  if (ctx.config->entry)
+    if (auto *undefined = dyn_cast<Undefined>(ctx.config->entry))
+      treatUndefinedSymbol(ctx,*undefined, "the entry point");
 
   // FIXME: This prints symbols that are undefined both in input files and
   // via -u flag twice.
-  for (const Symbol *sym : config->explicitUndefineds) {
+  for (const Symbol *sym : ctx.config->explicitUndefineds) {
     if (const auto *undefined = dyn_cast<Undefined>(sym))
-      treatUndefinedSymbol(*undefined, "-u");
+      treatUndefinedSymbol(ctx,*undefined, "-u");
   }
   // Literal exported-symbol names must be defined, but glob
   // patterns need not match.
   for (const CachedHashStringRef &cachedName :
-       config->exportedSymbols.literals) {
-    if (const Symbol *sym = symtab->find(cachedName))
+       ctx.config->exportedSymbols.literals) {
+    if (const Symbol *sym = ctx.symtab->find(cachedName))
       if (const auto *undefined = dyn_cast<Undefined>(sym))
-        treatUndefinedSymbol(*undefined, "-exported_symbol(s_list)");
+        treatUndefinedSymbol(ctx,*undefined, "-exported_symbol(s_list)");
   }
 }
 
-static void prepareSymbolRelocation(Symbol *sym, const InputSection *isec,
+static void prepareSymbolRelocation(Ctx&ctx,Symbol *sym, const InputSection *isec,
                                     const lld::macho::Reloc &r) {
   assert(sym->isLive());
-  const RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
+  const RelocAttrs &relocAttrs = ctx.target->getRelocAttrs(r.type);
 
   if (relocAttrs.hasAttr(RelocAttrBits::BRANCH)) {
     if (needsBinding(sym))
-      in.stubs->addEntry(sym);
+      ctx.in.stubs->addEntry(sym);
   } else if (relocAttrs.hasAttr(RelocAttrBits::GOT)) {
     if (relocAttrs.hasAttr(RelocAttrBits::POINTER) || needsBinding(sym))
-      in.got->addEntry(sym);
+      ctx.in.got->addEntry(sym);
   } else if (relocAttrs.hasAttr(RelocAttrBits::TLV)) {
     if (needsBinding(sym))
-      in.tlvPointers->addEntry(sym);
+      ctx.in.tlvPointers->addEntry(sym);
   } else if (relocAttrs.hasAttr(RelocAttrBits::UNSIGNED)) {
     // References from thread-local variable sections are treated as offsets
     // relative to the start of the referent section, and therefore have no
     // need of rebase opcodes.
     if (!(isThreadLocalVariables(isec->getFlags()) && isa<Defined>(sym)))
-      addNonLazyBindingEntries(sym, isec, r.offset, r.addend);
+      addNonLazyBindingEntries(ctx,sym, isec, r.offset, r.addend);
   }
 }
 
@@ -666,8 +669,8 @@ void Writer::scanRelocations() {
 
   // This can't use a for-each loop: It calls treatUndefinedSymbol(), which can
   // add to inputSections, which invalidates inputSections's iterators.
-  for (size_t i = 0; i < inputSections.size(); ++i) {
-    ConcatInputSection *isec = inputSections[i];
+  for (size_t i = 0; i < ctx.inputSections.size(); ++i) {
+    ConcatInputSection *isec = ctx.inputSections[i];
 
     if (isec->shouldOmitFromOutput())
       continue;
@@ -680,7 +683,7 @@ void Writer::scanRelocations() {
       if (auto *referentIsec = r.referent.dyn_cast<InputSection *>())
         r.referent = referentIsec->canonical();
 
-      if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
+      if (ctx.target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
         // Skip over the following UNSIGNED relocation -- it's just there as the
         // minuend, and doesn't have the usual UNSIGNED semantics. We don't want
         // to emit rebase opcodes for it.
@@ -693,42 +696,42 @@ void Writer::scanRelocations() {
       }
       if (auto *sym = r.referent.dyn_cast<Symbol *>()) {
         if (auto *undefined = dyn_cast<Undefined>(sym))
-          treatUndefinedSymbol(*undefined, isec, r.offset);
+          treatUndefinedSymbol(ctx,*undefined, isec, r.offset);
         // treatUndefinedSymbol() can replace sym with a DylibSymbol; re-check.
-        if (!isa<Undefined>(sym) && validateSymbolRelocation(sym, isec, r))
-          prepareSymbolRelocation(sym, isec, r);
+        if (!isa<Undefined>(sym) && validateSymbolRelocation(ctx,sym, isec, r))
+          prepareSymbolRelocation(ctx,sym, isec, r);
       } else {
         if (!r.pcrel) {
-          if (config->emitChainedFixups)
-            in.chainedFixups->addRebase(isec, r.offset);
+          if (ctx.config->emitChainedFixups)
+            ctx.in.chainedFixups->addRebase(isec, r.offset);
           else
-            in.rebase->addEntry(isec, r.offset);
+            ctx.in.rebase->addEntry(isec, r.offset);
         }
       }
     }
   }
 
-  in.unwindInfo->prepare();
+  ctx.in.unwindInfo->prepare();
 }
 
-static void addNonWeakDefinition(const Defined *defined) {
-  if (config->emitChainedFixups)
-    in.chainedFixups->setHasNonWeakDefinition();
+static void addNonWeakDefinition(Ctx&ctx,const Defined *defined) {
+  if (ctx.config->emitChainedFixups)
+    ctx.in.chainedFixups->setHasNonWeakDefinition();
   else
-    in.weakBinding->addNonWeakDefinition(defined);
+    ctx.in.weakBinding->addNonWeakDefinition(defined);
 }
 
 void Writer::scanSymbols() {
   TimeTraceScope timeScope("Scan symbols");
-  for (Symbol *sym : symtab->getSymbols()) {
+  for (Symbol *sym : ctx.symtab->getSymbols()) {
     if (auto *defined = dyn_cast<Defined>(sym)) {
       if (!defined->isLive())
         continue;
       defined->canonicalize();
       if (defined->overridesWeakDef)
-        addNonWeakDefinition(defined);
+        addNonWeakDefinition(ctx,defined);
       if (!defined->isAbsolute() && isCodeSection(defined->isec))
-        in.unwindInfo->addSymbol(defined);
+        ctx.in.unwindInfo->addSymbol(defined);
     } else if (const auto *dysym = dyn_cast<DylibSymbol>(sym)) {
       // This branch intentionally doesn't check isLive().
       if (dysym->isDynamicLookup())
@@ -737,11 +740,11 @@ void Writer::scanSymbols() {
           std::max(dysym->getFile()->refState, dysym->getRefState());
     } else if (isa<Undefined>(sym)) {
       if (sym->getName().starts_with(ObjCStubsSection::symbolPrefix))
-        in.objcStubs->addEntry(sym);
+        ctx.in.objcStubs->addEntry(sym);
     }
   }
 
-  for (const InputFile *file : inputFiles) {
+  for (const InputFile *file : ctx.inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       for (Symbol *sym : objFile->symbols) {
         if (auto *defined = dyn_cast_or_null<Defined>(sym)) {
@@ -750,7 +753,7 @@ void Writer::scanSymbols() {
           defined->canonicalize();
           if (!defined->isExternal() && !defined->isAbsolute() &&
               isCodeSection(defined->isec))
-            in.unwindInfo->addSymbol(defined);
+            ctx.in.unwindInfo->addSymbol(defined);
         }
       }
   }
@@ -776,36 +779,36 @@ static bool useLCBuildVersion(const PlatformInfo &platformInfo) {
 
 template <class LP> void Writer::createLoadCommands() {
   uint8_t segIndex = 0;
-  for (OutputSegment *seg : outputSegments) {
-    in.header->addLoadCommand(make<LCSegment<LP>>(seg->name, seg));
+  for (OutputSegment *seg : ctx.outputSegments) {
+    ctx.in.header->addLoadCommand(ctx.make<LCSegment<LP>>(seg->name, seg));
     seg->index = segIndex++;
   }
 
-  if (config->emitChainedFixups) {
-    in.header->addLoadCommand(make<LCChainedFixups>(in.chainedFixups));
-    in.header->addLoadCommand(make<LCExportsTrie>(in.exports));
+  if (ctx.config->emitChainedFixups) {
+    ctx.in.header->addLoadCommand(ctx.make<LCChainedFixups>(ctx.in.chainedFixups));
+    ctx.in.header->addLoadCommand(ctx.make<LCExportsTrie>(ctx.in.exports));
   } else {
-    in.header->addLoadCommand(make<LCDyldInfo>(
-        in.rebase, in.binding, in.weakBinding, in.lazyBinding, in.exports));
+    ctx.in.header->addLoadCommand(ctx.make<LCDyldInfo>(
+        ctx.in.rebase, ctx.in.binding, ctx.in.weakBinding, ctx.in.lazyBinding, ctx.in.exports));
   }
-  in.header->addLoadCommand(make<LCSymtab>(symtabSection, stringTableSection));
-  in.header->addLoadCommand(
-      make<LCDysymtab>(symtabSection, indirectSymtabSection));
-  if (!config->umbrella.empty())
-    in.header->addLoadCommand(make<LCSubFramework>(config->umbrella));
-  if (config->emitEncryptionInfo)
-    in.header->addLoadCommand(make<LCEncryptionInfo<LP>>());
-  for (StringRef path : config->runtimePaths)
-    in.header->addLoadCommand(make<LCRPath>(path));
+  ctx.in.header->addLoadCommand(ctx.make<LCSymtab>(symtabSection, stringTableSection));
+  ctx.in.header->addLoadCommand(
+      ctx.make<LCDysymtab>(symtabSection, indirectSymtabSection));
+  if (!ctx.config->umbrella.empty())
+    ctx.in.header->addLoadCommand(ctx.make<LCSubFramework>(ctx,ctx.config->umbrella));
+  if (ctx.config->emitEncryptionInfo)
+    ctx.in.header->addLoadCommand(ctx.make<LCEncryptionInfo<LP>>(ctx));
+  for (StringRef path : ctx.config->runtimePaths)
+    ctx.in.header->addLoadCommand(ctx.make<LCRPath>(ctx,path));
 
-  switch (config->outputType) {
+  switch (ctx.config->outputType) {
   case MH_EXECUTE:
-    in.header->addLoadCommand(make<LCLoadDylinker>());
+    ctx.in.header->addLoadCommand(ctx.make<LCLoadDylinker>(ctx));
     break;
   case MH_DYLIB:
-    in.header->addLoadCommand(make<LCDylib>(LC_ID_DYLIB, config->installName,
-                                            config->dylibCompatibilityVersion,
-                                            config->dylibCurrentVersion));
+    ctx.in.header->addLoadCommand(ctx.make<LCDylib>(ctx,LC_ID_DYLIB, ctx.config->installName,
+                                            ctx.config->dylibCompatibilityVersion,
+                                            ctx.config->dylibCurrentVersion));
     break;
   case MH_BUNDLE:
     break;
@@ -813,24 +816,24 @@ template <class LP> void Writer::createLoadCommands() {
     llvm_unreachable("unhandled output file type");
   }
 
-  if (config->generateUuid) {
-    uuidCommand = make<LCUuid>();
-    in.header->addLoadCommand(uuidCommand);
+  if (ctx.config->generateUuid) {
+    uuidCommand = ctx.make<LCUuid>();
+    ctx.in.header->addLoadCommand(uuidCommand);
   }
 
-  if (useLCBuildVersion(config->platformInfo))
-    in.header->addLoadCommand(make<LCBuildVersion>(config->platformInfo));
+  if (useLCBuildVersion(ctx.config->platformInfo))
+    ctx.in.header->addLoadCommand(ctx.make<LCBuildVersion>(ctx.config->platformInfo));
   else
-    in.header->addLoadCommand(make<LCMinVersion>(config->platformInfo));
+    ctx.in.header->addLoadCommand(ctx.make<LCMinVersion>(ctx.config->platformInfo));
 
-  if (config->secondaryPlatformInfo) {
-    in.header->addLoadCommand(
-        make<LCBuildVersion>(*config->secondaryPlatformInfo));
+  if (ctx.config->secondaryPlatformInfo) {
+    ctx.in.header->addLoadCommand(
+        ctx.make<LCBuildVersion>(*ctx.config->secondaryPlatformInfo));
   }
 
   // This is down here to match ld64's load command order.
-  if (config->outputType == MH_EXECUTE)
-    in.header->addLoadCommand(make<LCMain>());
+  if (ctx.config->outputType == MH_EXECUTE)
+    ctx.in.header->addLoadCommand(ctx.make<LCMain>(ctx));
 
   // See ld64's OutputFile::buildDylibOrdinalMapping for the corresponding
   // library ordinal computation code in ld64.
@@ -838,7 +841,7 @@ template <class LP> void Writer::createLoadCommands() {
   DenseMap<StringRef, int64_t> ordinalForInstallName;
 
   std::vector<DylibFile *> dylibFiles;
-  for (InputFile *file : inputFiles) {
+  for (InputFile *file : ctx.inputFiles) {
     if (auto *dylibFile = dyn_cast<DylibFile>(file))
       dylibFiles.push_back(dylibFile);
   }
@@ -865,7 +868,7 @@ template <class LP> void Writer::createLoadCommands() {
     // matches ld64, but it's something we should do better.
     if (!dylibFile->isReferenced() && !dylibFile->forceNeeded &&
         (!dylibFile->isExplicitlyLinked() || dylibFile->deadStrippable ||
-         config->deadStripDylibs))
+         ctx.config->deadStripDylibs))
       continue;
 
     // Several DylibFiles can have the same installName. Only emit a single
@@ -899,44 +902,44 @@ template <class LP> void Writer::createLoadCommands() {
         dylibFile->forceWeakImport || dylibFile->refState == RefState::Weak
             ? LC_LOAD_WEAK_DYLIB
             : LC_LOAD_DYLIB;
-    in.header->addLoadCommand(make<LCDylib>(lcType, dylibFile->installName,
+    ctx.in.header->addLoadCommand(ctx.make<LCDylib>(ctx,lcType, dylibFile->installName,
                                             dylibFile->compatibilityVersion,
                                             dylibFile->currentVersion));
 
     if (dylibFile->reexport)
-      in.header->addLoadCommand(
-          make<LCDylib>(LC_REEXPORT_DYLIB, dylibFile->installName));
+      ctx.in.header->addLoadCommand(
+          ctx.make<LCDylib>(ctx,LC_REEXPORT_DYLIB, dylibFile->installName));
   }
 
-  for (const auto &dyldEnv : config->dyldEnvs)
-    in.header->addLoadCommand(make<LCDyldEnv>(dyldEnv));
+  for (const auto &dyldEnv : ctx.config->dyldEnvs)
+    ctx.in.header->addLoadCommand(ctx.make<LCDyldEnv>(ctx,dyldEnv));
 
   if (functionStartsSection)
-    in.header->addLoadCommand(make<LCFunctionStarts>(functionStartsSection));
+    ctx.in.header->addLoadCommand(ctx.make<LCFunctionStarts>(functionStartsSection));
   if (dataInCodeSection)
-    in.header->addLoadCommand(make<LCDataInCode>(dataInCodeSection));
+    ctx.in.header->addLoadCommand(ctx.make<LCDataInCode>(dataInCodeSection));
   if (codeSignatureSection)
-    in.header->addLoadCommand(make<LCCodeSignature>(codeSignatureSection));
+    ctx.in.header->addLoadCommand(ctx.make<LCCodeSignature>(codeSignatureSection));
 
   const uint32_t MACOS_MAXPATHLEN = 1024;
-  config->headerPad = std::max(
-      config->headerPad, (config->headerPadMaxInstallNames
-                              ? LCDylib::getInstanceCount() * MACOS_MAXPATHLEN
+  ctx.config->headerPad = std::max(
+      ctx.config->headerPad, (ctx.config->headerPadMaxInstallNames
+                              ? ctx.instanceCount * MACOS_MAXPATHLEN
                               : 0));
 }
 
 // Sorting only can happen once all outputs have been collected. Here we sort
 // segments, output sections within each segment, and input sections within each
 // output segment.
-static void sortSegmentsAndSections() {
+static void sortSegmentsAndSections(Ctx&ctx) {
   TimeTraceScope timeScope("Sort segments and sections");
-  sortOutputSegments();
+  sortOutputSegments(ctx);
 
   DenseMap<const InputSection *, size_t> isecPriorities =
-      priorityBuilder.buildInputSectionPriorities();
+      ctx.priorityBuilder.buildInputSectionPriorities();
 
   uint32_t sectionIndex = 0;
-  for (OutputSegment *seg : outputSegments) {
+  for (OutputSegment *seg : ctx.outputSegments) {
     seg->sortOutputSections();
     // References from thread-local variable sections are treated as offsets
     // relative to the start of the thread-local data memory area, which
@@ -956,8 +959,8 @@ static void sortSegmentsAndSections() {
       if (!osec->isHidden())
         osec->index = ++sectionIndex;
       if (isThreadLocalData(osec->flags)) {
-        if (!firstTLVDataSection)
-          firstTLVDataSection = osec;
+        if (!ctx.firstTLVDataSection)
+          ctx.firstTLVDataSection = osec;
         osec->align = tlvAlign;
       }
 
@@ -976,19 +979,19 @@ static void sortSegmentsAndSections() {
 template <class LP> void Writer::createOutputSections() {
   TimeTraceScope timeScope("Create output sections");
   // First, create hidden sections
-  stringTableSection = make<StringTableSection>();
-  symtabSection = makeSymtabSection<LP>(*stringTableSection);
-  indirectSymtabSection = make<IndirectSymtabSection>();
-  if (config->adhocCodesign)
-    codeSignatureSection = make<CodeSignatureSection>();
-  if (config->emitDataInCodeInfo)
-    dataInCodeSection = make<DataInCodeSection>();
-  if (config->emitFunctionStarts)
-    functionStartsSection = make<FunctionStartsSection>();
+  stringTableSection = ctx.make<StringTableSection>(ctx);
+  symtabSection = makeSymtabSection<LP>(ctx,*stringTableSection);
+  indirectSymtabSection = ctx.make<IndirectSymtabSection>(ctx);
+  if (ctx.config->adhocCodesign)
+    codeSignatureSection = ctx.make<CodeSignatureSection>(ctx);
+  if (ctx.config->emitDataInCodeInfo)
+    dataInCodeSection = ctx.make<DataInCodeSection>(ctx);
+  if (ctx.config->emitFunctionStarts)
+    functionStartsSection = ctx.make<FunctionStartsSection>(ctx);
 
-  switch (config->outputType) {
+  switch (ctx.config->outputType) {
   case MH_EXECUTE:
-    make<PageZeroSection>();
+    ctx.make<PageZeroSection>(ctx);
     break;
   case MH_DYLIB:
   case MH_BUNDLE:
@@ -998,7 +1001,7 @@ template <class LP> void Writer::createOutputSections() {
   }
 
   // Then add input sections to output sections.
-  for (ConcatInputSection *isec : inputSections) {
+  for (ConcatInputSection *isec : ctx.inputSections) {
     if (isec->shouldOmitFromOutput())
       continue;
     ConcatOutputSection *osec = cast<ConcatOutputSection>(isec->parent);
@@ -1009,7 +1012,7 @@ template <class LP> void Writer::createOutputSections() {
 
   // Once all the inputs are added, we can finalize the output section
   // properties and create the corresponding output segments.
-  for (const auto &it : concatOutputSections) {
+  for (const auto &it : ctx.concatOutputSections) {
     StringRef segname = it.first.first;
     ConcatOutputSection *osec = it.second;
     assert(segname != segment_names::ld);
@@ -1017,30 +1020,30 @@ template <class LP> void Writer::createOutputSections() {
       // See comment in ObjFile::splitEhFrames()
       if (osec->name == section_names::ehFrame &&
           segname == segment_names::text)
-        osec->align = target->wordSize;
+        osec->align = ctx.target->wordSize;
 
       // MC keeps the default 1-byte alignment for __thread_vars, even though it
       // contains pointers that are fixed up by dyld, which requires proper
       // alignment.
       if (isThreadLocalVariables(osec->flags))
-        osec->align = std::max<uint32_t>(osec->align, target->wordSize);
+        osec->align = std::max<uint32_t>(osec->align, ctx.target->wordSize);
 
-      getOrCreateOutputSegment(segname)->addOutputSection(osec);
+      getOrCreateOutputSegment(ctx,segname)->addOutputSection(ctx,osec);
     }
   }
 
-  for (SyntheticSection *ssec : syntheticSections) {
-    auto it = concatOutputSections.find({ssec->segname, ssec->name});
+  for (SyntheticSection *ssec : ctx.syntheticSections) {
+    auto it = ctx.concatOutputSections.find({ssec->segname, ssec->name});
     // We add all LinkEdit sections here because we don't know if they are
     // needed until their finalizeContents() methods get called later. While
     // this means that we add some redundant sections to __LINKEDIT, there is
     // is no redundancy in the output, as we do not emit section headers for
     // any LinkEdit sections.
     if (ssec->isNeeded() || ssec->segname == segment_names::linkEdit) {
-      if (it == concatOutputSections.end()) {
-        getOrCreateOutputSegment(ssec->segname)->addOutputSection(ssec);
+      if (it == ctx.concatOutputSections.end()) {
+        getOrCreateOutputSegment(ctx,ssec->segname)->addOutputSection(ctx,ssec);
       } else {
-        fatal("section from " +
+        ctx.fatal("section from " +
               toString(it->second->firstSection()->getFile()) +
               " conflicts with synthetic section " + ssec->segname + "," +
               ssec->name);
@@ -1049,16 +1052,16 @@ template <class LP> void Writer::createOutputSections() {
   }
 
   // dyld requires __LINKEDIT segment to always exist (even if empty).
-  linkEditSegment = getOrCreateOutputSegment(segment_names::linkEdit);
+  linkEditSegment = getOrCreateOutputSegment(ctx,segment_names::linkEdit);
 }
 
 void Writer::finalizeAddresses() {
   TimeTraceScope timeScope("Finalize addresses");
-  uint64_t pageSize = target->getPageSize();
+  uint64_t pageSize = ctx.target->getPageSize();
 
   // We could parallelize this loop, but local benchmarking indicates it is
   // faster to do it all in the main thread.
-  for (OutputSegment *seg : outputSegments) {
+  for (OutputSegment *seg : ctx.outputSegments) {
     if (seg == linkEditSegment)
       continue;
     for (OutputSection *osec : seg->getSections()) {
@@ -1076,7 +1079,7 @@ void Writer::finalizeAddresses() {
   // Note that at this point, __LINKEDIT sections are empty, but we need to
   // determine addresses of other segments/sections before generating its
   // contents.
-  for (OutputSegment *seg : outputSegments) {
+  for (OutputSegment *seg : ctx.outputSegments) {
     if (seg == linkEditSegment)
       continue;
     seg->addr = addr;
@@ -1098,9 +1101,9 @@ void Writer::finalizeLinkEditSegment() {
   TimeTraceScope timeScope("Finalize __LINKEDIT segment");
   // Fill __LINKEDIT contents.
   std::array<LinkEditSection *, 10> linkEditSections{
-      in.rebase,         in.binding,
-      in.weakBinding,    in.lazyBinding,
-      in.exports,        in.chainedFixups,
+      ctx.in.rebase,         ctx.in.binding,
+      ctx.in.weakBinding,    ctx.in.lazyBinding,
+      ctx.in.exports,        ctx.in.chainedFixups,
       symtabSection,     indirectSymtabSection,
       dataInCodeSection, functionStartsSection,
   };
@@ -1142,20 +1145,20 @@ void Writer::assignAddresses(OutputSegment *seg) {
 
 void Writer::openFile() {
   Expected<std::unique_ptr<FileOutputBuffer>> bufferOrErr =
-      FileOutputBuffer::create(config->outputFile, fileOff,
+      FileOutputBuffer::create(ctx.config->outputFile, fileOff,
                                FileOutputBuffer::F_executable);
 
   if (!bufferOrErr)
-    fatal("failed to open " + config->outputFile + ": " +
+    ctx.fatal("failed to open " + ctx.config->outputFile + ": " +
           llvm::toString(bufferOrErr.takeError()));
   buffer = std::move(*bufferOrErr);
-  in.bufferStart = buffer->getBufferStart();
+  ctx.in.bufferStart = buffer->getBufferStart();
 }
 
 void Writer::writeSections() {
   uint8_t *buf = buffer->getBufferStart();
   std::vector<const OutputSection *> osecs;
-  for (const OutputSegment *seg : outputSegments)
+  for (const OutputSegment *seg : ctx.outputSegments)
     append_range(osecs, seg->getSections());
 
   parallelForEach(osecs.begin(), osecs.end(), [&](const OutputSection *osec) {
@@ -1164,14 +1167,14 @@ void Writer::writeSections() {
 }
 
 void Writer::applyOptimizationHints() {
-  if (config->arch() != AK_arm64 || config->ignoreOptimizationHints)
+  if (ctx.config->arch() != AK_arm64 || ctx.config->ignoreOptimizationHints)
     return;
 
   uint8_t *buf = buffer->getBufferStart();
   TimeTraceScope timeScope("Apply linker optimization hints");
-  parallelForEach(inputFiles, [buf](const InputFile *file) {
+  parallelForEach(ctx.inputFiles, [&ctx=ctx,buf](const InputFile *file) {
     if (const auto *objFile = dyn_cast<ObjFile>(file))
-      target->applyOptimizationHints(buf, *objFile);
+      ctx.target->applyOptimizationHints(buf, *objFile);
   });
 }
 
@@ -1194,7 +1197,7 @@ void Writer::writeUuid() {
     future.wait();
   // Append the output filename so that identical binaries with different names
   // don't get the same UUID.
-  hashes[chunks.size()] = xxh3_64bits(sys::path::filename(config->finalOutput));
+  hashes[chunks.size()] = xxh3_64bits(sys::path::filename(ctx.config->finalOutput));
   uint64_t digest = xxh3_64bits({reinterpret_cast<uint8_t *>(hashes.data()),
                                  hashes.size() * sizeof(uint64_t)});
   uuidCommand->writeUuid(digest);
@@ -1203,16 +1206,16 @@ void Writer::writeUuid() {
 // This is step 5 of the algorithm described in the class comment of
 // ChainedFixupsSection.
 void Writer::buildFixupChains() {
-  if (!config->emitChainedFixups)
+  if (!ctx.config->emitChainedFixups)
     return;
 
-  const std::vector<Location> &loc = in.chainedFixups->getLocations();
+  const std::vector<Location> &loc = ctx.in.chainedFixups->getLocations();
   if (loc.empty())
     return;
 
   TimeTraceScope timeScope("Build fixup chains");
 
-  const uint64_t pageSize = target->getPageSize();
+  const uint64_t pageSize = ctx.target->getPageSize();
   constexpr uint32_t stride = 4; // for DYLD_CHAINED_PTR_64
 
   for (size_t i = 0, count = loc.size(); i < count;) {
@@ -1226,13 +1229,13 @@ void Writer::buildFixupChains() {
       uint64_t offset = loc[i].offset - loc[i - 1].offset;
 
       auto fail = [&](Twine message) {
-        error(loc[i].isec->getSegName() + "," + loc[i].isec->getName() +
+        ctx.error(loc[i].isec->getSegName() + "," + loc[i].isec->getName() +
               ", offset " +
               Twine(loc[i].offset - loc[i].isec->parent->getSegmentOffset()) +
               ": " + message);
       };
 
-      if (offset < target->wordSize)
+      if (offset < ctx.target->wordSize)
         return fail("fixups overlap");
       if (offset % stride != 0)
         return fail(
@@ -1257,47 +1260,47 @@ void Writer::writeCodeSignature() {
 void Writer::writeOutputFile() {
   TimeTraceScope timeScope("Write output file");
   openFile();
-  reportPendingUndefinedSymbols();
-  if (errorCount())
+  reportPendingUndefinedSymbols(ctx);
+  if (ctx.errorCount())
     return;
   writeSections();
   applyOptimizationHints();
   buildFixupChains();
-  if (config->generateUuid)
+  if (ctx.config->generateUuid)
     writeUuid();
   writeCodeSignature();
 
   if (auto e = buffer->commit())
-    fatal("failed to write output '" + buffer->getPath() +
+    ctx.fatal("failed to write output '" + buffer->getPath() +
           "': " + toString(std::move(e)));
 }
 
 template <class LP> void Writer::run() {
   treatSpecialUndefineds();
-  if (config->entry && needsBinding(config->entry))
-    in.stubs->addEntry(config->entry);
+  if (ctx.config->entry && needsBinding(ctx.config->entry))
+    ctx.in.stubs->addEntry(ctx.config->entry);
 
   // Canonicalization of all pointers to InputSections should be handled by
   // these two scan* methods. I.e. from this point onward, for all live
   // InputSections, we should have `isec->canonical() == isec`.
   scanSymbols();
-  if (in.objcStubs->isNeeded())
-    in.objcStubs->setUp();
+  if (ctx.in.objcStubs->isNeeded())
+    ctx.in.objcStubs->setUp();
   scanRelocations();
-  if (in.initOffsets->isNeeded())
-    in.initOffsets->setUp();
+  if (ctx.in.initOffsets->isNeeded())
+    ctx.in.initOffsets->setUp();
 
   // Do not proceed if there were undefined or duplicate symbols.
-  reportPendingUndefinedSymbols();
-  reportPendingDuplicateSymbols();
-  if (errorCount())
+  reportPendingUndefinedSymbols(ctx);
+  reportPendingDuplicateSymbols(ctx);
+  if (ctx.errorCount())
     return;
 
-  if (in.stubHelper && in.stubHelper->isNeeded())
-    in.stubHelper->setUp();
+  if (ctx.in.stubHelper && ctx.in.stubHelper->isNeeded())
+    ctx.in.stubHelper->setUp();
 
-  if (in.objCImageInfo->isNeeded())
-    in.objCImageInfo->finalizeContents();
+  if (ctx.in.objCImageInfo->isNeeded())
+    ctx.in.objCImageInfo->finalizeContents();
 
   // At this point, we should know exactly which output sections are needed,
   // courtesy of scanSymbols() and scanRelocations().
@@ -1308,67 +1311,63 @@ template <class LP> void Writer::run() {
   // hardware call instructions have limited range, e.g., ARM(64).
   // The thunks are created as InputSections interspersed among
   // the ordinary __TEXT,_text InputSections.
-  sortSegmentsAndSections();
+  sortSegmentsAndSections(ctx);
   createLoadCommands<LP>();
   finalizeAddresses();
   threadPool.async([&] {
-    if (LLVM_ENABLE_THREADS && config->timeTraceEnabled)
-      timeTraceProfilerInitialize(config->timeTraceGranularity, "writeMapFile");
-    writeMapFile();
-    if (LLVM_ENABLE_THREADS && config->timeTraceEnabled)
+    if (LLVM_ENABLE_THREADS && ctx.config->timeTraceEnabled)
+      timeTraceProfilerInitialize(ctx.config->timeTraceGranularity, "writeMapFile");
+    writeMapFile(ctx);
+    if (LLVM_ENABLE_THREADS && ctx.config->timeTraceEnabled)
       timeTraceProfilerFinishThread();
   });
   finalizeLinkEditSegment();
   writeOutputFile();
 }
 
-template <class LP> void macho::writeResult() { Writer().run<LP>(); }
+template <class LP> void macho::writeResult(Ctx&ctx) { Writer(ctx).run<LP>(); }
 
-void macho::resetWriter() { LCDylib::resetInstanceCount(); }
-
-void macho::createSyntheticSections() {
-  in.header = make<MachHeaderSection>();
-  if (config->dedupStrings)
-    in.cStringSection =
-        make<DeduplicatedCStringSection>(section_names::cString);
+void macho::createSyntheticSections(Ctx&ctx) {
+  ctx.in.header = ctx.make<MachHeaderSection>(ctx);
+  if (ctx.config->dedupStrings)
+    ctx.in.cStringSection =
+        ctx.make<DeduplicatedCStringSection>(ctx,section_names::cString);
   else
-    in.cStringSection = make<CStringSection>(section_names::cString);
-  in.objcMethnameSection =
-      make<DeduplicatedCStringSection>(section_names::objcMethname);
-  in.wordLiteralSection = make<WordLiteralSection>();
-  if (config->emitChainedFixups) {
-    in.chainedFixups = make<ChainedFixupsSection>();
+    ctx.in.cStringSection = ctx.make<CStringSection>(ctx,section_names::cString);
+  ctx.in.objcMethnameSection =
+      ctx.make<DeduplicatedCStringSection>(ctx,section_names::objcMethname);
+  ctx.in.wordLiteralSection = ctx.make<WordLiteralSection>(ctx);
+  if (ctx.config->emitChainedFixups) {
+    ctx.in.chainedFixups = ctx.make<ChainedFixupsSection>(ctx);
   } else {
-    in.rebase = make<RebaseSection>();
-    in.binding = make<BindingSection>();
-    in.weakBinding = make<WeakBindingSection>();
-    in.lazyBinding = make<LazyBindingSection>();
-    in.lazyPointers = make<LazyPointerSection>();
-    in.stubHelper = make<StubHelperSection>();
+    ctx.in.rebase = ctx.make<RebaseSection>(ctx);
+    ctx.in.binding = ctx.make<BindingSection>(ctx);
+    ctx.in.weakBinding = ctx.make<WeakBindingSection>(ctx);
+    ctx.in.lazyBinding = ctx.make<LazyBindingSection>(ctx);
+    ctx.in.lazyPointers = ctx.make<LazyPointerSection>(ctx);
+    ctx.in.stubHelper = ctx.make<StubHelperSection>(ctx);
   }
-  in.exports = make<ExportSection>();
-  in.got = make<GotSection>();
-  in.tlvPointers = make<TlvPointerSection>();
-  in.stubs = make<StubsSection>();
-  in.objcStubs = make<ObjCStubsSection>();
-  in.unwindInfo = makeUnwindInfoSection();
-  in.objCImageInfo = make<ObjCImageInfoSection>();
-  in.initOffsets = make<InitOffsetsSection>();
+  ctx.in.exports = ctx.make<ExportSection>(ctx);
+  ctx.in.got = ctx.make<GotSection>(ctx);
+  ctx.in.tlvPointers = ctx.make<TlvPointerSection>(ctx);
+  ctx.in.stubs = ctx.make<StubsSection>(ctx);
+  ctx.in.objcStubs = ctx.make<ObjCStubsSection>(ctx);
+  ctx.in.unwindInfo = makeUnwindInfoSection(ctx);
+  ctx.in.objCImageInfo = ctx.make<ObjCImageInfoSection>(ctx);
+  ctx.in.initOffsets = ctx.make<InitOffsetsSection>(ctx);
 
   // This section contains space for just a single word, and will be used by
   // dyld to cache an address to the image loader it uses.
-  uint8_t *arr = bAlloc().Allocate<uint8_t>(target->wordSize);
-  memset(arr, 0, target->wordSize);
-  in.imageLoaderCache = makeSyntheticInputSection(
+  uint8_t *arr = ctx.bAlloc.Allocate<uint8_t>(ctx.target->wordSize);
+  memset(arr, 0, ctx.target->wordSize);
+  ctx.in.imageLoaderCache = makeSyntheticInputSection(ctx,
       segment_names::data, section_names::data, S_REGULAR,
-      ArrayRef<uint8_t>{arr, target->wordSize},
-      /*align=*/target->wordSize);
+      ArrayRef<uint8_t>{arr, ctx.target->wordSize},
+      /*align=*/ctx.target->wordSize);
   // References from dyld are not visible to us, so ensure this section is
   // always treated as live.
-  in.imageLoaderCache->live = true;
+  ctx.in.imageLoaderCache->live = true;
 }
 
-OutputSection *macho::firstTLVDataSection = nullptr;
-
-template void macho::writeResult<LP64>();
-template void macho::writeResult<ILP32>();
+template void macho::writeResult<LP64>(Ctx&ctx);
+template void macho::writeResult<ILP32>(Ctx&ctx);

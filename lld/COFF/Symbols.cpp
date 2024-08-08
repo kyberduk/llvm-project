@@ -28,7 +28,7 @@ static_assert(sizeof(SymbolUnion) <= 48,
               "symbols should be optimized for memory usage");
 
 // Returns a symbol name for an error message.
-static std::string maybeDemangleSymbol(const COFFLinkerContext &ctx,
+static std::string maybeDemangleSymbol(COFFLinkerContext &ctx,
                                        StringRef symName) {
   if (ctx.config.demangle) {
     std::string prefix;
@@ -45,22 +45,21 @@ static std::string maybeDemangleSymbol(const COFFLinkerContext &ctx,
   }
   return std::string(symName);
 }
-std::string toString(const COFFLinkerContext &ctx, coff::Symbol &b) {
-  return maybeDemangleSymbol(ctx, b.getName());
+std::string toString(COFFLinkerContext &ctx, coff::Symbol &b) {
+  return maybeDemangleSymbol(ctx, b.getName(ctx));
 }
-std::string toCOFFString(const COFFLinkerContext &ctx,
-                         const Archive::Symbol &b) {
+std::string toCOFFString(COFFLinkerContext &ctx, const Archive::Symbol &b) {
   return maybeDemangleSymbol(ctx, b.getName());
 }
 
 namespace coff {
 
-void Symbol::computeName() {
+void Symbol::computeName(COFFLinkerContext &ctx) {
   assert(nameData == nullptr &&
          "should only compute the name once for DefinedCOFF symbols");
   auto *d = cast<DefinedCOFF>(this);
   StringRef nameStr =
-      check(cast<ObjFile>(d->file)->getCOFFObj()->getSymbolName(d->sym));
+      check(ctx, cast<ObjFile>(d->file)->getCOFFObj()->getSymbolName(d->sym));
   nameData = nameStr.data();
   nameSize = nameStr.size();
   assert(nameSize == nameStr.size() && "name length truncated");
@@ -90,8 +89,8 @@ bool Symbol::isLive() const {
 }
 
 // MinGW specific.
-void Symbol::replaceKeepingName(Symbol *other, size_t size) {
-  StringRef origName = getName();
+void Symbol::replaceKeepingName(COFFLinkerContext &ctx, Symbol *other, size_t size) {
+  StringRef origName = getName(ctx);
   memcpy(this, other, size);
   nameData = origName.data();
   nameSize = origName.size();
@@ -110,13 +109,13 @@ uint64_t DefinedAbsolute::getRVA() { return va - ctx.config.imageBase; }
 static Chunk *makeImportThunk(COFFLinkerContext &ctx, DefinedImportData *s,
                               uint16_t machine) {
   if (machine == AMD64)
-    return make<ImportThunkChunkX64>(ctx, s);
+    return ctx.make<ImportThunkChunkX64>(ctx, s);
   if (machine == I386)
-    return make<ImportThunkChunkX86>(ctx, s);
+    return ctx.make<ImportThunkChunkX86>(ctx, s);
   if (machine == ARM64)
-    return make<ImportThunkChunkARM64>(ctx, s);
+    return ctx.make<ImportThunkChunkARM64>(ctx, s);
   assert(machine == ARMNT);
-  return make<ImportThunkChunkARM>(ctx, s);
+  return ctx.make<ImportThunkChunkARM>(ctx, s);
 }
 
 DefinedImportThunk::DefinedImportThunk(COFFLinkerContext &ctx, StringRef name,
@@ -132,13 +131,18 @@ Defined *Undefined::getWeakAlias() {
   return nullptr;
 }
 
-MemoryBufferRef LazyArchive::getMemberBuffer() {
+MemoryBufferRef LazyArchive::getMemberBuffer(COFFLinkerContext &ctx) {
   Archive::Child c =
-      CHECK(sym.getMember(), "could not get the member for symbol " +
+      CHECK(ctx, sym.getMember(), "could not get the member for symbol " +
                                  toCOFFString(file->ctx, sym));
-  return CHECK(c.getMemoryBufferRef(),
+  return CHECK(ctx, c.getMemoryBufferRef(),
                "could not get the buffer for the member defining symbol " +
                    toCOFFString(file->ctx, sym));
 }
+
+DefinedLocalImport::DefinedLocalImport(COFFLinkerContext &ctx, StringRef n,
+                                       Defined *s)
+    : Defined(DefinedLocalImportKind, n),
+      data(ctx.make<LocalImportChunk>(ctx, s)) {}
 } // namespace coff
 } // namespace lld

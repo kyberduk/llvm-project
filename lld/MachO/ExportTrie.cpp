@@ -35,6 +35,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ExportTrie.h"
+#include "Ctx.h"
 #include "Symbols.h"
 
 #include "lld/Common/ErrorHandler.h"
@@ -300,9 +301,9 @@ public:
   TrieParser(const uint8_t *buf, size_t size, const TrieEntryCallback &callback)
       : start(buf), end(start + size), callback(callback) {}
 
-  void parse(const uint8_t *buf, const Twine &cumulativeString);
+  void parse(Ctx&ctx,const uint8_t *buf, const Twine &cumulativeString);
 
-  void parse() { parse(start, ""); }
+  void parse(Ctx&ctx) { parse(ctx,start, ""); }
 
   const uint8_t *start;
   const uint8_t *end;
@@ -311,9 +312,9 @@ public:
 
 } // namespace
 
-void TrieParser::parse(const uint8_t *buf, const Twine &cumulativeString) {
+void TrieParser::parse(Ctx&ctx,const uint8_t *buf, const Twine &cumulativeString) {
   if (buf >= end)
-    fatal("Node offset points outside export section");
+    ctx.fatal("Node offset points outside export section");
 
   unsigned ulebSize;
   uint64_t terminalSize = decodeULEB128(buf, &ulebSize);
@@ -332,14 +333,14 @@ void TrieParser::parse(const uint8_t *buf, const Twine &cumulativeString) {
     buf += substring.size() + 1;
     offset = decodeULEB128(buf, &ulebSize);
     buf += ulebSize;
-    parse(start + offset, cumulativeString + substring);
+    parse(ctx, start + offset, cumulativeString + substring);
   }
 }
 
-void macho::parseTrie(const uint8_t *buf, size_t size,
+void macho::parseTrie(Ctx&ctx,const uint8_t *buf, size_t size,
                       const TrieEntryCallback &callback) {
   if (size == 0)
     return;
 
-  TrieParser(buf, size, callback).parse();
+  TrieParser(buf, size, callback).parse(ctx);
 }

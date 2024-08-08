@@ -38,6 +38,7 @@ struct ArmCmseEntryFunction {
 // is one add* function per symbol type.
 class SymbolTable {
 public:
+  SymbolTable(Ctx &c) : ctx(c) {}
   ArrayRef<Symbol *> getSymbols() const { return symVector; }
 
   void wrap(Symbol *sym, Symbol *real, Symbol *wrap);
@@ -46,7 +47,7 @@ public:
 
   template <typename T> Symbol *addSymbol(const T &newSym) {
     Symbol *sym = insert(newSym.getName());
-    sym->resolve(newSym);
+    sym->resolve(ctx, newSym);
     return sym;
   }
   Symbol *addAndCheckDuplicate(const Defined &newSym);
@@ -56,6 +57,8 @@ public:
   Symbol *find(StringRef name);
 
   void handleDynamicList();
+
+  Ctx &ctx;
 
   // Set of .so files to not link the same shared object file more than once.
   llvm::DenseMap<llvm::CachedHashStringRef, SharedFile *> soNames;
@@ -100,8 +103,6 @@ private:
   // directive in version scripts.
   std::optional<llvm::StringMap<SmallVector<Symbol *, 0>>> demangledSyms;
 };
-
-LLVM_LIBRARY_VISIBILITY extern SymbolTable symtab;
 
 } // namespace lld::elf
 

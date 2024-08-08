@@ -28,7 +28,8 @@ void createPDB(COFFLinkerContext &ctx, llvm::ArrayRef<uint8_t> sectionTable,
                llvm::codeview::DebugInfo *buildId);
 
 std::optional<std::pair<llvm::StringRef, uint32_t>>
-getFileLineCodeView(const SectionChunk *c, uint32_t addr);
+getFileLineCodeView(COFFLinkerContext &ctx, const SectionChunk *c,
+                    uint32_t addr);
 
 } // namespace coff
 } // namespace lld

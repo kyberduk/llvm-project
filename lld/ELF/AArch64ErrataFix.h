@@ -14,7 +14,7 @@
 #include <vector>
 
 namespace lld::elf {
-
+class Ctx;
 class Defined;
 class InputSection;
 class InputSectionDescription;
@@ -22,6 +22,8 @@ class Patch843419Section;
 
 class AArch64Err843419Patcher {
 public:
+  AArch64Err843419Patcher(Ctx &c) : ctx(c) {}
+
   // return true if Patches have been added to the OutputSections.
   bool createFixes();
 
@@ -33,6 +35,8 @@ private:
                      std::vector<Patch843419Section *> &patches);
 
   void init();
+
+  Ctx &ctx;
 
   // A cache of the mapping symbols defined by the InputSection sorted in order
   // of ascending value with redundant symbols removed. These describe

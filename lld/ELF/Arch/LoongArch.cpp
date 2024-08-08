@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Ctx.h"
 #include "InputFiles.h"
 #include "OutputSections.h"
 #include "Symbols.h"
@@ -23,7 +24,7 @@ using namespace lld::elf;
 namespace {
 class LoongArch final : public TargetInfo {
 public:
-  LoongArch();
+  LoongArch(Ctx &ctx);
   uint32_t calcEFlags() const override;
   int64_t getImplicitAddend(const uint8_t *buf, RelType type) const override;
   void writeGotPlt(uint8_t *buf, const Symbol &s) const override;
@@ -152,22 +153,20 @@ static uint32_t setK16(uint32_t insn, uint32_t imm) {
   return (insn & 0xfc0003ff) | (extractBits(imm, 15, 0) << 10);
 }
 
-static bool isJirl(uint32_t insn) {
-  return (insn & 0xfc000000) == JIRL;
-}
+static bool isJirl(uint32_t insn) { return (insn & 0xfc000000) == JIRL; }
 
-static void handleUleb128(uint8_t *loc, uint64_t val) {
+static void handleUleb128(Ctx &ctx, uint8_t *loc, uint64_t val) {
   const uint32_t maxcount = 1 + 64 / 7;
   uint32_t count;
   const char *error = nullptr;
   uint64_t orig = decodeULEB128(loc, &count, nullptr, &error);
   if (count > maxcount || (count == maxcount && error))
-    errorOrWarn(getErrorLocation(loc) + "extra space for uleb128");
+    errorOrWarn(ctx, getErrorLocation(ctx, loc) + "extra space for uleb128");
   uint64_t mask = count < maxcount ? (1ULL << 7 * count) - 1 : -1ULL;
   encodeULEB128((orig + val) & mask, loc, count);
 }
 
-LoongArch::LoongArch() {
+LoongArch::LoongArch(Ctx &ctx) : TargetInfo(ctx) {
   // The LoongArch ISA itself does not have a limit on page sizes. According to
   // the ISA manual, the PS (page size) field in MTLB entries and CSR.STLBPS is
   // 6 bits wide, meaning the maximum page size is 2^63 which is equivalent to
@@ -185,7 +184,7 @@ LoongArch::LoongArch() {
   relativeRel = R_LARCH_RELATIVE;
   iRelativeRel = R_LARCH_IRELATIVE;
 
-  if (config->is64) {
+  if (ctx.config->is64) {
     symbolicRel = R_LARCH_64;
     tlsModuleIndexRel = R_LARCH_TLS_DTPMOD64;
     tlsOffsetRel = R_LARCH_TLS_DTPREL64;
@@ -207,10 +206,10 @@ LoongArch::LoongArch() {
   ipltEntrySize = 16;
 }
 
-static uint32_t getEFlags(const InputFile *f) {
-  if (config->is64)
-    return cast<ObjFile<ELF64LE>>(f)->getObj().getHeader().e_flags;
-  return cast<ObjFile<ELF32LE>>(f)->getObj().getHeader().e_flags;
+static uint32_t getEFlags(Ctx &ctx, const InputFile *f) {
+  if (ctx.config->is64)
+    return cast<ObjFile<ELF64LE>>(f)->getObj(ctx).getHeader().e_flags;
+  return cast<ObjFile<ELF32LE>>(f)->getObj(ctx).getHeader().e_flags;
 }
 
 static bool inputFileHasCode(const InputFile *f) {
@@ -237,7 +236,7 @@ uint32_t LoongArch::calcEFlags() const {
       continue;
 
     // Take the first non-zero e_flags as the reference.
-    uint32_t flags = getEFlags(f);
+    uint32_t flags = getEFlags(ctx, f);
     if (target == 0 && flags != 0) {
       target = flags;
       targetFile = f;
@@ -245,9 +244,9 @@ uint32_t LoongArch::calcEFlags() const {
 
     if ((flags & EF_LOONGARCH_ABI_MODIFIER_MASK) !=
         (target & EF_LOONGARCH_ABI_MODIFIER_MASK))
-      error(toString(f) +
-            ": cannot link object files with different ABI from " +
-            toString(targetFile));
+      ctx.error(toString(ctx, f) +
+                ": cannot link object files with different ABI from " +
+                toString(ctx, targetFile));
 
     // We cannot process psABI v1.x / object ABI v0 files (containing stack
     // relocations), unlike ld.bfd.
@@ -265,7 +264,7 @@ uint32_t LoongArch::calcEFlags() const {
     // and the few impacted users are advised to simply rebuild world or
     // reinstall a recent system.
     if ((flags & EF_LOONGARCH_OBJABI_MASK) != EF_LOONGARCH_OBJABI_V1)
-      error(toString(f) + ": unsupported object file ABI version");
+      ctx.error(toString(ctx, f) + ": unsupported object file ABI version");
   }
 
   return target;
@@ -274,8 +273,9 @@ uint32_t LoongArch::calcEFlags() const {
 int64_t LoongArch::getImplicitAddend(const uint8_t *buf, RelType type) const {
   switch (type) {
   default:
-    internalLinkerError(getErrorLocation(buf),
-                        "cannot read addend for relocation " + toString(type));
+    internalLinkerError(ctx, getErrorLocation(ctx, buf),
+                        "cannot read addend for relocation " +
+                            toString(ctx, type));
     return 0;
   case R_LARCH_32:
   case R_LARCH_TLS_DTPMOD32:
@@ -289,7 +289,7 @@ int64_t LoongArch::getImplicitAddend(const uint8_t *buf, RelType type) const {
     return read64le(buf);
   case R_LARCH_RELATIVE:
   case R_LARCH_IRELATIVE:
-    return config->is64 ? read64le(buf) : read32le(buf);
+    return ctx.config->is64 ? read64le(buf) : read32le(buf);
   case R_LARCH_NONE:
   case R_LARCH_JUMP_SLOT:
     // These relocations are defined as not having an implicit addend.
@@ -298,18 +298,18 @@ int64_t LoongArch::getImplicitAddend(const uint8_t *buf, RelType type) const {
 }
 
 void LoongArch::writeGotPlt(uint8_t *buf, const Symbol &s) const {
-  if (config->is64)
-    write64le(buf, in.plt->getVA());
+  if (ctx.config->is64)
+    write64le(buf, ctx.in.plt->getVA(ctx));
   else
-    write32le(buf, in.plt->getVA());
+    write32le(buf, ctx.in.plt->getVA(ctx));
 }
 
 void LoongArch::writeIgotPlt(uint8_t *buf, const Symbol &s) const {
-  if (config->writeAddends) {
-    if (config->is64)
-      write64le(buf, s.getVA());
+  if (ctx.config->writeAddends) {
+    if (ctx.config->is64)
+      write64le(buf, s.getVA(ctx));
     else
-      write32le(buf, s.getVA());
+      write32le(buf, s.getVA(ctx));
   }
 }
 
@@ -329,26 +329,27 @@ void LoongArch::writePltHeader(uint8_t *buf) const {
   //   ld.[wd]   $t3, $t2, %pcrel_lo12(.got.plt)  ; t3 = _dl_runtime_resolve
   //   addi.[wd] $t1, $t1, -pltHeaderSize-12      ; t1 = &.plt[i] - &.plt[0]
   //   addi.[wd] $t0, $t2, %pcrel_lo12(.got.plt)
-  //   srli.[wd] $t1, $t1, (is64?1:2)             ; t1 = &.got.plt[i] - &.got.plt[0]
-  //   ld.[wd]   $t0, $t0, Wordsize               ; t0 = link_map
+  //   srli.[wd] $t1, $t1, (is64?1:2)             ; t1 = &.got.plt[i] -
+  //   &.got.plt[0] ld.[wd]   $t0, $t0, Wordsize               ; t0 = link_map
   //   jr        $t3
-  uint32_t offset = in.gotPlt->getVA() - in.plt->getVA();
-  uint32_t sub = config->is64 ? SUB_D : SUB_W;
-  uint32_t ld = config->is64 ? LD_D : LD_W;
-  uint32_t addi = config->is64 ? ADDI_D : ADDI_W;
-  uint32_t srli = config->is64 ? SRLI_D : SRLI_W;
+  uint32_t offset = ctx.in.gotPlt->getVA(ctx) - ctx.in.plt->getVA(ctx);
+  uint32_t sub = ctx.config->is64 ? SUB_D : SUB_W;
+  uint32_t ld = ctx.config->is64 ? LD_D : LD_W;
+  uint32_t addi = ctx.config->is64 ? ADDI_D : ADDI_W;
+  uint32_t srli = ctx.config->is64 ? SRLI_D : SRLI_W;
   write32le(buf + 0, insn(PCADDU12I, R_T2, hi20(offset), 0));
   write32le(buf + 4, insn(sub, R_T1, R_T1, R_T3));
   write32le(buf + 8, insn(ld, R_T3, R_T2, lo12(offset)));
-  write32le(buf + 12, insn(addi, R_T1, R_T1, lo12(-target->pltHeaderSize - 12)));
+  write32le(buf + 12,
+            insn(addi, R_T1, R_T1, lo12(-ctx.target->pltHeaderSize - 12)));
   write32le(buf + 16, insn(addi, R_T0, R_T2, lo12(offset)));
-  write32le(buf + 20, insn(srli, R_T1, R_T1, config->is64 ? 1 : 2));
-  write32le(buf + 24, insn(ld, R_T0, R_T0, config->wordsize));
+  write32le(buf + 20, insn(srli, R_T1, R_T1, ctx.config->is64 ? 1 : 2));
+  write32le(buf + 24, insn(ld, R_T0, R_T0, ctx.config->wordsize));
   write32le(buf + 28, insn(JIRL, R_ZERO, R_T3, 0));
 }
 
 void LoongArch::writePlt(uint8_t *buf, const Symbol &sym,
-                     uint64_t pltEntryAddr) const {
+                         uint64_t pltEntryAddr) const {
   // See the comment in writePltHeader for reason why pcaddu12i is used instead
   // of the pcalau12i that's more commonly seen in the ELF psABI v2.0 days.
   //
@@ -356,17 +357,17 @@ void LoongArch::writePlt(uint8_t *buf, const Symbol &sym,
   //   ld.[wd]   $t3, $t3, %pcrel_lo12(f@.got.plt)
   //   jirl      $t1, $t3, 0
   //   nop
-  uint32_t offset = sym.getGotPltVA() - pltEntryAddr;
+  uint32_t offset = sym.getGotPltVA(ctx) - pltEntryAddr;
   write32le(buf + 0, insn(PCADDU12I, R_T3, hi20(offset), 0));
   write32le(buf + 4,
-            insn(config->is64 ? LD_D : LD_W, R_T3, R_T3, lo12(offset)));
+            insn(ctx.config->is64 ? LD_D : LD_W, R_T3, R_T3, lo12(offset)));
   write32le(buf + 8, insn(JIRL, R_T1, R_T3, 0));
   write32le(buf + 12, insn(ANDI, R_ZERO, R_ZERO, 0));
 }
 
 RelType LoongArch::getDynRel(RelType type) const {
-  return type == target->symbolicRel ? type
-                                     : static_cast<RelType>(R_LARCH_NONE);
+  return type == ctx.target->symbolicRel ? type
+                                         : static_cast<RelType>(R_LARCH_NONE);
 }
 
 RelExpr LoongArch::getRelExpr(const RelType type, const Symbol &s,
@@ -390,7 +391,8 @@ RelExpr LoongArch::getRelExpr(const RelType type, const Symbol &s,
     // work around it for a while, even if a new relocation type may be
     // introduced in the future [2].
     //
-    // [1]: https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=9f482b73f41a9a1bbfb173aad0733d1c824c788a
+    // [1]:
+    // https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=9f482b73f41a9a1bbfb173aad0733d1c824c788a
     // [2]: https://github.com/loongson/la-abi-specs/pull/3
     return isJirl(read32le(loc)) ? R_PLT : R_ABS;
   case R_LARCH_TLS_DTPREL32:
@@ -459,7 +461,7 @@ RelExpr LoongArch::getRelExpr(const RelType type, const Symbol &s,
     // Ideally we would scan in an extra pass for all LO12s on JIRL, then mark
     // every HI20 reloc referring to the same symbol differently; this is not
     // feasible with the current function signature of getRelExpr that doesn't
-    // allow for such inter-pass state.
+    // allow for such inter-pass ctx.
     //
     // So, unfortunately we have to again workaround this quirk the same way as
     // BFD: assuming every R_LARCH_PCALA_HI20 is potentially PLT-needing, only
@@ -483,7 +485,7 @@ RelExpr LoongArch::getRelExpr(const RelType type, const Symbol &s,
   case R_LARCH_TLS_GD_HI20:
     return R_TLSGD_GOT;
   case R_LARCH_RELAX:
-    return config->relax ? R_RELAX_HINT : R_NONE;
+    return ctx.config->relax ? R_RELAX_HINT : R_NONE;
   case R_LARCH_ALIGN:
     return R_RELAX_HINT;
 
@@ -494,10 +496,11 @@ RelExpr LoongArch::getRelExpr(const RelType type, const Symbol &s,
   // - relocs that are not used anywhere (R_LARCH_{ADD,SUB}_24 [1], and the
   //   two GNU vtable-related relocs).
   //
-  // [1]: https://web.archive.org/web/20230709064026/https://github.com/loongson/LoongArch-Documentation/issues/51
+  // [1]:
+  // https://web.archive.org/web/20230709064026/https://github.com/loongson/LoongArch-Documentation/issues/51
   default:
-    error(getErrorLocation(loc) + "unknown relocation (" + Twine(type) +
-          ") against symbol " + toString(s));
+    ctx.error(getErrorLocation(ctx, loc) + "unknown relocation (" +
+              Twine(type) + ") against symbol " + toString(ctx, s));
     return R_NONE;
   }
 }
@@ -518,7 +521,7 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
                          uint64_t val) const {
   switch (rel.type) {
   case R_LARCH_32_PCREL:
-    checkInt(loc, val, 32, rel);
+    checkInt(ctx, loc, val, 32, rel);
     [[fallthrough]];
   case R_LARCH_32:
   case R_LARCH_TLS_DTPREL32:
@@ -531,26 +534,26 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
     return;
 
   case R_LARCH_PCREL20_S2:
-    checkInt(loc, val, 22, rel);
-    checkAlignment(loc, val, 4, rel);
+    checkInt(ctx, loc, val, 22, rel);
+    checkAlignment(ctx, loc, val, 4, rel);
     write32le(loc, setJ20(read32le(loc), val >> 2));
     return;
 
   case R_LARCH_B16:
-    checkInt(loc, val, 18, rel);
-    checkAlignment(loc, val, 4, rel);
+    checkInt(ctx, loc, val, 18, rel);
+    checkAlignment(ctx, loc, val, 4, rel);
     write32le(loc, setK16(read32le(loc), val >> 2));
     return;
 
   case R_LARCH_B21:
-    checkInt(loc, val, 23, rel);
-    checkAlignment(loc, val, 4, rel);
+    checkInt(ctx, loc, val, 23, rel);
+    checkAlignment(ctx, loc, val, 4, rel);
     write32le(loc, setD5k16(read32le(loc), val >> 2));
     return;
 
   case R_LARCH_B26:
-    checkInt(loc, val, 28, rel);
-    checkAlignment(loc, val, 4, rel);
+    checkInt(ctx, loc, val, 28, rel);
+    checkAlignment(ctx, loc, val, 4, rel);
     write32le(loc, setD10k16(read32le(loc), val >> 2));
     return;
 
@@ -560,9 +563,9 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
     // immediate fields, the relocation range is [-128G - 0x20000, +128G -
     // 0x20000) (of course must be 4-byte aligned).
     if (((int64_t)val + 0x20000) != llvm::SignExtend64(val + 0x20000, 38))
-      reportRangeError(loc, rel, Twine(val), llvm::minIntN(38) - 0x20000,
+      reportRangeError(ctx, loc, rel, Twine(val), llvm::minIntN(38) - 0x20000,
                        llvm::maxIntN(38) - 0x20000);
-    checkAlignment(loc, val, 4, rel);
+    checkAlignment(ctx, loc, val, 4, rel);
     // Since jirl performs sign extension on the offset immediate, adds (1<<17)
     // to original val to get the correct hi20.
     uint32_t hi20 = extractBits(val + (1 << 17), 37, 18);
@@ -582,7 +585,7 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
     // In this case, process like an R_LARCH_B16, but without overflow checking
     // and only taking the value's lowest 12 bits.
     if (isJirl(read32le(loc))) {
-      checkAlignment(loc, val, 4, rel);
+      checkAlignment(ctx, loc, val, 4, rel);
       val = SignExtend64<12>(val);
       write32le(loc, setK16(read32le(loc), val >> 2));
       return;
@@ -650,7 +653,7 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
     write64le(loc, read64le(loc) + val);
     return;
   case R_LARCH_ADD_ULEB128:
-    handleUleb128(loc, val);
+    handleUleb128(ctx, loc, val);
     return;
   case R_LARCH_SUB6:
     *loc = (*loc & 0xc0) | ((*loc - val) & 0x3f);
@@ -668,7 +671,7 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
     write64le(loc, read64le(loc) - val);
     return;
   case R_LARCH_SUB_ULEB128:
-    handleUleb128(loc, -val);
+    handleUleb128(ctx, loc, -val);
     return;
 
   case R_LARCH_MARK_LA:
@@ -684,8 +687,8 @@ void LoongArch::relocate(uint8_t *loc, const Relocation &rel,
   }
 }
 
-static bool relax(InputSection &sec) {
-  const uint64_t secAddr = sec.getVA();
+static bool relax(Ctx &ctx, InputSection &sec) {
+  const uint64_t secAddr = sec.getVA(ctx);
   const MutableArrayRef<Relocation> relocs = sec.relocs();
   auto &aux = *sec.relaxAux;
   bool changed = false;
@@ -714,10 +717,12 @@ static bool relax(InputSection &sec) {
         remove = allBytes - curBytes;
       // If we can't satisfy this alignment, we've found a bad input.
       if (LLVM_UNLIKELY(static_cast<int32_t>(remove) < 0)) {
-        errorOrWarn(getErrorLocation((const uint8_t *)loc) +
-                    "insufficient padding bytes for " + lld::toString(r.type) +
-                    ": " + Twine(allBytes) + " bytes available for " +
-                    "requested alignment of " + Twine(align) + " bytes");
+        errorOrWarn(ctx, getErrorLocation(ctx, (const uint8_t *)loc) +
+                             "insufficient padding bytes for " +
+                             lld::toString(ctx, r.type) + ": " +
+                             Twine(allBytes) + " bytes available for " +
+                             "requested alignment of " + Twine(align) +
+                             " bytes");
         remove = 0;
       }
       break;
@@ -748,7 +753,7 @@ static bool relax(InputSection &sec) {
   }
   // Inform assignAddresses that the size has changed.
   if (!isUInt<32>(delta))
-    fatal("section size decrease is too large: " + Twine(delta));
+    ctx.fatal("section size decrease is too large: " + Twine(delta));
   sec.bytesDropped = delta;
   return changed;
 }
@@ -761,27 +766,27 @@ static bool relax(InputSection &sec) {
 // change in section sizes can have cascading effect and require another
 // relaxation pass.
 bool LoongArch::relaxOnce(int pass) const {
-  if (config->relocatable)
+  if (ctx.config->relocatable)
     return false;
 
   if (pass == 0)
-    initSymbolAnchors();
+    initSymbolAnchors(ctx);
 
   SmallVector<InputSection *, 0> storage;
   bool changed = false;
-  for (OutputSection *osec : outputSections) {
+  for (OutputSection *osec : ctx.outputSections) {
     if (!(osec->flags & SHF_EXECINSTR))
       continue;
     for (InputSection *sec : getInputSections(*osec, storage))
-      changed |= relax(*sec);
+      changed |= relax(ctx, *sec);
   }
   return changed;
 }
 
 void LoongArch::finalizeRelax(int passes) const {
-  log("relaxation passes: " + Twine(passes));
+  ctx.log("relaxation passes: " + Twine(passes));
   SmallVector<InputSection *, 0> storage;
-  for (OutputSection *osec : outputSections) {
+  for (OutputSection *osec : ctx.outputSections) {
     if (!(osec->flags & SHF_EXECINSTR))
       continue;
     for (InputSection *sec : getInputSections(*osec, storage)) {
@@ -792,7 +797,7 @@ void LoongArch::finalizeRelax(int passes) const {
       MutableArrayRef<Relocation> rels = sec->relocs();
       ArrayRef<uint8_t> old = sec->content();
       size_t newSize = old.size() - aux.relocDeltas[rels.size() - 1];
-      uint8_t *p = context().bAlloc.Allocate<uint8_t>(newSize);
+      uint8_t *p = ctx.bAlloc.Allocate<uint8_t>(newSize);
       uint64_t offset = 0;
       int64_t delta = 0;
       sec->content_ = p;
@@ -833,7 +838,4 @@ void LoongArch::finalizeRelax(int passes) const {
   }
 }
 
-TargetInfo *elf::getLoongArchTargetInfo() {
-  static LoongArch target;
-  return &target;
-}
+TargetInfo *elf::getLoongArchTargetInfo(Ctx &ctx) { return new LoongArch(ctx); }

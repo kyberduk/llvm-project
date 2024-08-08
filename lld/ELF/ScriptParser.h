@@ -13,18 +13,18 @@
 #include "llvm/Support/MemoryBufferRef.h"
 
 namespace lld::elf {
-
+class Ctx;
 // Parses a linker script. Calling this function updates
-// lld::elf::config and lld::elf::script.
-void readLinkerScript(MemoryBufferRef mb);
+// ctx.config and ctx.script.
+void readLinkerScript(Ctx &ctx, MemoryBufferRef mb);
 
 // Parses a version script.
-void readVersionScript(MemoryBufferRef mb);
+void readVersionScript(Ctx &ctx, MemoryBufferRef mb);
 
-void readDynamicList(MemoryBufferRef mb);
+void readDynamicList(Ctx &ctx, MemoryBufferRef mb);
 
 // Parses the defsym expression.
-void readDefsym(StringRef name, MemoryBufferRef mb);
+void readDefsym(Ctx &ctx, StringRef name, MemoryBufferRef mb);
 
 bool hasWildcard(StringRef s);
 

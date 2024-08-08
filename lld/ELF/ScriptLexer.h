@@ -15,10 +15,10 @@
 #include <vector>
 
 namespace lld::elf {
-
+class Ctx;
 class ScriptLexer {
 public:
-  explicit ScriptLexer(MemoryBufferRef mb);
+  explicit ScriptLexer(Ctx &ctx, MemoryBufferRef mb);
 
   void setError(const Twine &msg);
   void tokenize(MemoryBufferRef mb);
@@ -33,6 +33,8 @@ public:
   bool consumeLabel(StringRef tok);
   std::string getCurrentLocation();
   MemoryBufferRef getCurrentMB();
+
+  Ctx &ctx;
 
   std::vector<MemoryBufferRef> mbs;
   std::vector<StringRef> tokens;

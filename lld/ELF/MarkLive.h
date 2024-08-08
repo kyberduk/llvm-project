@@ -11,8 +11,9 @@
 
 namespace lld::elf {
 
-template <class ELFT> void markLive();
+class Ctx;
+template <class ELFT> void markLive(Ctx &ctx);
 
-}
+} // namespace lld::elf
 
 #endif // LLD_ELF_MARKLIVE_H
