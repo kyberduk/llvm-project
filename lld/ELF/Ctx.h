@@ -117,7 +117,7 @@ public:
 
   llvm::DenseMap<InputSection *, SmallVector<const Defined *, 0>> sectionMap;
 
-  ElfSym es;
+  ElfSym es = {};
 
   Out out;
 
